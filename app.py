@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
-from main import MTGPriceScraper
+from scraper_manager import ScraperManager
+from scraper_config import create_custom_config
+from scrapers import CryptMTGScraper, MagiCarteScraper, FaceToFaceGamesScraper
 import time
 
 # Page configuration
@@ -77,7 +79,43 @@ def format_buy_lists(results):
 
 # App title and description
 st.markdown('<p class="big-font">🃏 MTG Card Price Scraper</p>', unsafe_allow_html=True)
-st.markdown("Compare prices from **CryptMTG** and **MagiCarte** to find the best deals!")
+st.markdown("Compare prices from **CryptMTG**, **MagiCarte**, and **Face to Face Games** to find the best deals!")
+
+# Sidebar for configuration
+st.sidebar.header("⚙️ Configuration")
+
+# Scraper selection
+st.sidebar.subheader("Enabled Scrapers")
+use_cryptmtg = st.sidebar.checkbox("CryptMTG", value=True)
+use_magicarte = st.sidebar.checkbox("MagiCarte", value=True)
+use_f2f = st.sidebar.checkbox("Face to Face Games", value=True)
+
+# Vendor filtering options
+st.sidebar.subheader("Vendor Filtering")
+enable_filtering = st.sidebar.checkbox(
+    "Enable vendor filtering",
+    value=True,
+    help="Filter out vendors with too few cards to minimize shipping costs"
+)
+
+min_cards = st.sidebar.slider(
+    "Min cards per vendor",
+    min_value=1,
+    max_value=10,
+    value=3,
+    disabled=not enable_filtering,
+    help="Minimum number of cards required from a vendor"
+)
+
+price_override = st.sidebar.slider(
+    "Price override threshold ($)",
+    min_value=0.0,
+    max_value=20.0,
+    value=5.0,
+    step=0.5,
+    disabled=not enable_filtering,
+    help="Use a vendor even if below min cards if card is this much cheaper"
+)
 
 # Create two columns for input and reset button
 col1, col2 = st.columns([5, 1])
@@ -104,52 +142,84 @@ with col2:
 if st.button("🔍 Find Best Prices", use_container_width=True, type="primary"):
     if not card_input.strip():
         st.error("Please enter at least one card!")
+    elif not (use_cryptmtg or use_magicarte or use_f2f):
+        st.error("Please enable at least one scraper!")
     else:
         st.session_state.scraping = True
 
+        # Build scraper list
+        enabled_scrapers = []
+        if use_cryptmtg:
+            enabled_scrapers.append(CryptMTGScraper)
+        if use_magicarte:
+            enabled_scrapers.append(MagiCarteScraper)
+        if use_f2f:
+            enabled_scrapers.append(FaceToFaceGamesScraper)
+
         # Show loading state
-        with st.spinner("🔄 Scraping prices from websites..."):
-            progress_text = st.empty()
-            progress_bar = st.progress(0)
+        progress_text = st.empty()
+        progress_bar = st.progress(0)
 
-            try:
-                # Initialize scraper (headless mode for Streamlit)
-                scraper = MTGPriceScraper(headless=False)
+        try:
+            # Create configuration
+            config = create_custom_config(
+                scrapers=enabled_scrapers,
+                min_cards=min_cards,
+                price_override=price_override,
+                enable_filtering=enable_filtering,
+                headless=True  # Always use headless in Streamlit
+            )
 
-                # Parse cards
-                progress_text.text("Parsing cards...")
-                progress_bar.progress(10)
-                cards = scraper.parse_moxfield_format(card_input)
+            # Initialize manager
+            progress_text.text("Initializing browser...")
+            progress_bar.progress(10)
+            manager = ScraperManager(config)
 
-                # Scrape CryptMTG
-                progress_text.text(f"Scraping CryptMTG for {len(cards)} cards...")
-                progress_bar.progress(30)
+            # Define progress callback
+            def update_progress(current, total, message):
+                # Calculate progress: 10% for init, 80% for scraping, 10% for processing
+                progress_percent = 10 + int((current / total) * 80)
+                progress_text.text(f"[{current}/{total}] {message}")
+                progress_bar.progress(progress_percent)
 
-                # Perform scraping
-                results = scraper.scrape_all(card_input)
+            # Perform scraping with progress updates
+            results = manager.scrape_all(card_input, progress_callback=update_progress)
 
-                progress_bar.progress(100)
-                progress_text.text("Complete!")
-                time.sleep(0.5)
+            # Final processing
+            progress_text.text("Processing results...")
+            progress_bar.progress(95)
+            time.sleep(0.3)
 
-                # Store results in session state
-                st.session_state.results = results
-                st.session_state.df = format_results_to_dataframe(results)
-                st.session_state.scraping = False
+            progress_bar.progress(100)
+            progress_text.text("Complete!")
+            time.sleep(0.5)
 
-                # Clear progress indicators
-                progress_text.empty()
-                progress_bar.empty()
+            # Store results in session state
+            st.session_state.results = results
+            st.session_state.df = format_results_to_dataframe(results)
+            st.session_state.scraping = False
 
-                st.success(f"✅ Successfully scraped prices for {len(cards)} cards!")
+            # Clear progress indicators
+            progress_text.empty()
+            progress_bar.empty()
 
-            except Exception as e:
-                import traceback
-                error_details = traceback.format_exc()
-                st.error(f"❌ Error during scraping: {str(e)}")
-                with st.expander("Show error details"):
-                    st.code(error_details)
-                st.session_state.scraping = False
+            num_found = len(results.get("best_prices", {}))
+            st.success(f"✅ Successfully found prices for {num_found} cards!")
+
+            # Show filtering info if enabled
+            if enable_filtering:
+                st.info(
+                    f"ℹ️ Vendor filtering enabled: Min {min_cards} cards per vendor, "
+                    f"${price_override} price override threshold"
+                )
+
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            st.error(f"❌ Error during scraping: {str(e)}")
+            with st.expander("Show error details"):
+                st.code(error_details)
+            st.session_state.scraping = False
 
 # Display results
 if st.session_state.results and st.session_state.df is not None:
@@ -187,15 +257,43 @@ if st.session_state.results and st.session_state.df is not None:
         hide_index=True
     )
 
-    # Download CSV button
-    csv = st.session_state.df.to_csv(index=False)
-    st.download_button(
-        label="📥 Download CSV",
-        data=csv,
-        file_name="mtg_best_prices.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
+    # Download buttons
+    col1, col2 = st.columns(2)
+
+    with col1:
+        csv_best = st.session_state.df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Best Prices CSV",
+            data=csv_best,
+            file_name="mtg_best_prices.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+    with col2:
+        # Create all prices CSV if available
+        if st.session_state.results.get("all_prices"):
+            all_prices_data = []
+            for price in st.session_state.results["all_prices"]:
+                all_prices_data.append({
+                    "Card Name": price.card_name,
+                    "Original Query": price.original_query,
+                    "Price": price.price if price.found else None,
+                    "Website": price.website,
+                    "Found": price.found,
+                    "Quantity Available": price.quantity_available if price.found else None,
+                })
+            df_all = pd.DataFrame(all_prices_data)
+            df_all = df_all.sort_values(by=["Original Query", "Price"])
+            csv_all = df_all.to_csv(index=False)
+            st.download_button(
+                label="📥 Download All Prices CSV (Debug)",
+                data=csv_all,
+                file_name="mtg_all_prices.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Shows all prices from all websites for debugging"
+            )
 
     # Buy lists by website
     st.markdown("---")
@@ -225,7 +323,7 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>Made with Streamlit | Scraping CryptMTG & MagiCarte</p>
+        <p>Made with Streamlit | Scraping CryptMTG, MagiCarte & Face to Face Games</p>
     </div>
     """,
     unsafe_allow_html=True

@@ -8,3 +8,5 @@ wheels/
 
 # Virtual environments
 .venv
+mtg_all_prices.csv
+mtg_best_prices.csv

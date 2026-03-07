@@ -19,6 +19,22 @@ class VendorFilterConfig:
 
 
 @dataclass
+class VendorPreferenceConfig:
+    """Configuration for vendor preference ordering"""
+
+    # Ordered list of preferred vendors (most preferred first)
+    preference_order: List[str]
+
+    # Maximum price difference to keep card at preferred vendor (in $)
+    # If a card is at most $X more expensive at a preferred vendor, keep it there
+    preference_threshold: float
+
+    def __post_init__(self):
+        if self.preference_threshold < 0:
+            raise ValueError("Preference threshold must be non-negative")
+
+
+@dataclass
 class ScraperConfig:
     """Main configuration for the scraper system"""
 
@@ -27,6 +43,9 @@ class ScraperConfig:
 
     # Vendor filtering configuration
     vendor_filter: VendorFilterConfig
+
+    # Vendor preference configuration (optional, for manual vendor selection mode)
+    vendor_preference: VendorPreferenceConfig = None
 
     # Whether to run scrapers in headless mode
     headless: bool = False

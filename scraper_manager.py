@@ -1,6 +1,7 @@
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional, Callable, Tuple
 from selenium import webdriver
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from base_scraper import Card, CardPrice, BaseScraper
 from scraper_config import ScraperConfig, VendorFilterConfig
 
@@ -18,6 +19,133 @@ class ScraperManager:
         self.config = config
         self.driver = None
         self.scrapers: List[BaseScraper] = []
+
+    def _initialize_driver(self) -> webdriver.Chrome:
+        """Create a fresh ChromeDriver instance with standard options"""
+        options = webdriver.ChromeOptions()
+        if self.config.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        options.add_experimental_option('excludeSwitches', ['enable-logging'])
+
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(30)
+        return driver
+
+    def _scrape_single_vendor(
+        self,
+        scraper_class,
+        cards: List[Card],
+        status_callback: Optional[Callable[[str, str], None]] = None
+    ) -> Tuple[str, List[CardPrice]]:
+        """
+        Scrape a single vendor in a thread-safe manner.
+        Creates its own WebDriver instance.
+
+        Args:
+            scraper_class: The scraper class to instantiate
+            cards: List of cards to search for
+            status_callback: Optional callback(vendor_name, status) for progress updates
+
+        Returns:
+            Tuple of (vendor_name, list of CardPrice results)
+        """
+        driver = None
+        vendor_name = "Unknown"
+
+        try:
+            # Create fresh driver for this thread
+            driver = self._initialize_driver()
+            scraper = scraper_class(driver)
+
+            # Get vendor name from instance
+            vendor_name = scraper.website_name
+
+            # Notify starting
+            if status_callback:
+                status_callback(vendor_name, "loading")
+
+            # Only scrape if enabled
+            if not scraper.is_enabled():
+                print(f"{vendor_name} is disabled, skipping...")
+                if status_callback:
+                    status_callback(vendor_name, "error")
+                return (vendor_name, [])
+
+            # Perform scraping
+            print(f"Scraping {vendor_name}...")
+            results = scraper.scrape(cards)
+            print(f"  Successfully scraped {len([p for p in results if p.found])} cards from {vendor_name}")
+
+            # Notify completion
+            if status_callback:
+                status_callback(vendor_name, "complete")
+
+            return (vendor_name, results)
+
+        except Exception as e:
+            print(f"  Error scraping {vendor_name}: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Notify error
+            if status_callback:
+                status_callback(vendor_name, "error")
+
+            # Return empty results on error
+            return (vendor_name, [])
+
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+
+    def scrape_all_parallel(
+        self,
+        cards: List[Card],
+        status_callback: Optional[Callable[[str, str], None]] = None
+    ) -> Dict[str, List[CardPrice]]:
+        """
+        Scrape all enabled vendors in parallel.
+
+        Args:
+            cards: List of Card objects to search for
+            status_callback: Optional callback(vendor_name, status) for progress updates
+
+        Returns:
+            Dict mapping vendor_name -> List[CardPrice]
+        """
+        all_results = {}
+
+        # Use ThreadPoolExecutor for parallel scraping
+        max_workers = min(len(self.config.enabled_scrapers), 5)  # Limit to 5 concurrent scrapers
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all scraping tasks
+            future_to_scraper = {
+                executor.submit(
+                    self._scrape_single_vendor,
+                    scraper_class,
+                    cards,
+                    status_callback
+                ): scraper_class
+                for scraper_class in self.config.enabled_scrapers
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_scraper):
+                vendor_name, results = future.result()
+                all_results[vendor_name] = results
+
+        return all_results
 
     def parse_moxfield_format(self, card_list: str) -> List[Card]:
         """Parse Moxfield format card list"""
@@ -347,6 +475,164 @@ class ScraperManager:
             }
 
         return results
+
+    def recalculate_results_for_selected_vendors(
+        self,
+        all_vendor_results: Dict[str, List[CardPrice]],
+        parsed_cards: List[Card],
+        selected_vendors: List[str],
+        vendor_preferences: List[str],
+        preference_threshold: float
+    ) -> Dict:
+        """
+        Recalculate best prices and buy lists based on selected vendors and preferences.
+        Does NOT re-scrape - uses cached results.
+
+        Args:
+            all_vendor_results: Complete results from all scrapers
+            parsed_cards: Original parsed card list
+            selected_vendors: List of vendor names user wants to buy from
+            vendor_preferences: Ordered list of preferred vendors (most preferred first)
+            preference_threshold: Max price difference to keep card at preferred vendor
+
+        Returns:
+            Dict with best_prices, buy_lists, summary, not_found
+        """
+        # Filter to only selected vendors
+        filtered_results = {
+            vendor: results
+            for vendor, results in all_vendor_results.items()
+            if vendor in selected_vendors
+        }
+
+        # Flatten all prices from selected vendors
+        all_prices = []
+        for vendor_name, prices in filtered_results.items():
+            all_prices.extend(prices)
+
+        # Build best prices using preference logic
+        best_prices = {}
+        card_prices = {}
+
+        # Group prices by card
+        for price in all_prices:
+            if price.original_query not in card_prices:
+                card_prices[price.original_query] = []
+            card_prices[price.original_query].append(price)
+
+        # Find best price for each card using preference logic
+        for card in parsed_cards:
+            card_name = card.name
+            if card_name in card_prices:
+                found_prices = [p for p in card_prices[card_name] if p.found]
+
+                if found_prices:
+                    # Apply preference-based selection
+                    selected_price = self._select_vendor_with_preference(
+                        found_prices,
+                        vendor_preferences,
+                        preference_threshold,
+                        selected_vendors
+                    )
+
+                    if selected_price:
+                        best_prices[card_name] = {
+                            "quantity_needed": card.quantity,
+                            "best_price": selected_price.price,
+                            "website": selected_price.website,
+                            "quantity_available": selected_price.quantity_available
+                        }
+
+        # Build buy lists per vendor
+        buy_lists = self._build_buy_lists(best_prices)
+
+        # Calculate summary
+        summary = self._calculate_summary(buy_lists)
+
+        # Find cards not found in selected vendors
+        not_found = [
+            card.name for card in parsed_cards
+            if card.name not in best_prices
+        ]
+
+        return {
+            "best_prices": best_prices,
+            "buy_lists": buy_lists,
+            "summary": summary,
+            "not_found": not_found,
+            "all_prices": all_prices
+        }
+
+    def _select_vendor_with_preference(
+        self,
+        available_prices: List[CardPrice],
+        vendor_preferences: List[str],
+        threshold: float,
+        selected_vendors: List[str]
+    ) -> Optional[CardPrice]:
+        """
+        Select vendor for a card based on preference order and threshold.
+
+        Logic:
+        1. Find the absolute cheapest price among selected vendors
+        2. For each vendor in preference order:
+           - If vendor is in selected_vendors AND has this card:
+             - If price <= (cheapest + threshold): select this vendor
+        3. If no preferred vendor within threshold, select absolute cheapest
+        """
+        if not available_prices:
+            return None
+
+        # Sort by price (ascending)
+        sorted_prices = sorted(available_prices, key=lambda p: p.price)
+        cheapest_price = sorted_prices[0].price
+
+        # Try to find a preferred vendor within threshold
+        for preferred_vendor in vendor_preferences:
+            if preferred_vendor not in selected_vendors:
+                continue  # Skip unselected vendors
+
+            for price in available_prices:
+                if price.website == preferred_vendor:
+                    if price.price <= (cheapest_price + threshold):
+                        return price
+                    break  # This vendor's price is too high
+
+        # Fall back to absolute cheapest
+        return sorted_prices[0]
+
+    def _build_buy_lists(self, best_prices: Dict) -> Dict:
+        """Build per-vendor shopping lists from best prices."""
+        buy_lists = {}
+
+        for card_name, details in best_prices.items():
+            vendor = details["website"]
+            if vendor not in buy_lists:
+                buy_lists[vendor] = []
+
+            buy_lists[vendor].append({
+                "card": card_name,
+                "quantity": details["quantity_needed"],
+                "price_per_unit": details["best_price"],
+                "total_price": details["best_price"] * details["quantity_needed"]
+            })
+
+        return buy_lists
+
+    def _calculate_summary(self, buy_lists: Dict) -> Dict:
+        """Calculate summary statistics per vendor."""
+        summary = {}
+
+        for vendor, items in buy_lists.items():
+            total_cards = sum(item["quantity"] for item in items)
+            total_price = sum(item["total_price"] for item in items)
+
+            summary[vendor] = {
+                "total_cards": total_cards,
+                "total_price": round(total_price, 2)
+            }
+
+        return summary
 
     def print_results(self, results: Dict):
         """Print formatted results"""

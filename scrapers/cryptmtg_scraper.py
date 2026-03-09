@@ -24,11 +24,11 @@ class CryptMTGScraper(BaseScraper):
         prices = []
 
         try:
-            print(f"  Loading {self.website_url}...")
+            self.log(f"Loading {self.website_url}...")
             self.driver.get(self.website_url)
             time.sleep(3)  # Wait for initial load
 
-            print(f"  Page loaded, looking for textarea...")
+            self.log("Page loaded, looking for textarea...")
             # Remove any overlays that might block clicks
             remove_overlays(self.driver)
 
@@ -42,17 +42,17 @@ class CryptMTGScraper(BaseScraper):
                         (By.CSS_SELECTOR, 'textarea[data-testid="submission-textarea"]')
                     )
                 )
-                print(f"  Textarea found, entering {len(cards)} cards...")
+                self.log(f"Textarea found, entering {len(cards)} cards...")
                 textarea.clear()
                 time.sleep(0.5)
                 textarea.send_keys(card_text)
                 time.sleep(1)
             except Exception as textarea_error:
-                print(f"  Error finding/filling textarea: {textarea_error}")
+                self.log(f"Error finding/filling textarea: {textarea_error}")
                 raise
 
             # Submit decklist using safe click
-            print(f"  Submitting decklist...")
+            self.log("Submitting decklist...")
             submit_success = wait_and_click(
                 self.driver,
                 'button[aria-label="submit decklist"]',
@@ -61,7 +61,7 @@ class CryptMTGScraper(BaseScraper):
             )
 
             if not submit_success:
-                print(f"  Warning: Could not click submit button, trying Enter key...")
+                self.log("Warning: Could not click submit button, trying Enter key...")
                 # Try alternative: press Enter on textarea
                 from selenium.webdriver.common.keys import Keys
                 textarea.send_keys(Keys.RETURN)
@@ -69,11 +69,11 @@ class CryptMTGScraper(BaseScraper):
             time.sleep(3)  # Wait for results
 
             # Parse results
-            print(f"  Parsing results...")
+            self.log("Parsing results...")
             prices.extend(self._extract_prices(cards))
 
         except Exception as e:
-            print(f"  Error scraping {self.website_name}: {e}")
+            self.log(f"Error scraping: {e}")
             import traceback
             traceback.print_exc()
             # Add not found entries for all cards
@@ -131,7 +131,7 @@ class CryptMTGScraper(BaseScraper):
                     )
 
                 except Exception as e:
-                    print(f"Error parsing card item: {e}")
+                    self.log(f"Error parsing card item: {e}")
 
             # Match found cards with requested cards
             for card in cards:
@@ -159,7 +159,7 @@ class CryptMTGScraper(BaseScraper):
                         prices.append(self._create_not_found_price(card))
 
         except Exception as e:
-            print(f"Error extracting prices from {self.website_name}: {e}")
+            self.log(f"Error extracting prices: {e}")
 
         return prices
 

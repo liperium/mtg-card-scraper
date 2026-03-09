@@ -1,6 +1,8 @@
 import re
+import os
 from typing import List, Dict, Optional, Callable, Tuple
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from base_scraper import Card, CardPrice, BaseScraper
 from scraper_config import ScraperConfig, VendorFilterConfig
@@ -35,7 +37,19 @@ class ScraperManager:
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         options.add_experimental_option('excludeSwitches', ['enable-logging'])
 
-        driver = webdriver.Chrome(options=options)
+        # Use Nix-provided chromedriver if available (for NixOS compatibility)
+        chromedriver_path = os.environ.get('CHROMEDRIVER_PATH')
+        chrome_bin = os.environ.get('CHROME_BIN')
+
+        if chrome_bin:
+            options.binary_location = chrome_bin
+
+        if chromedriver_path:
+            service = Service(executable_path=chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
+
         driver.set_page_load_timeout(30)
         return driver
 
@@ -74,15 +88,15 @@ class ScraperManager:
 
             # Only scrape if enabled
             if not scraper.is_enabled():
-                print(f"{vendor_name} is disabled, skipping...")
+                print(f"{vendor_name} - Disabled, skipping...")
                 if status_callback:
                     status_callback(vendor_name, "error")
                 return (vendor_name, [])
 
             # Perform scraping
-            print(f"Scraping {vendor_name}...")
+            print(f"{vendor_name} - Scraping...")
             results = scraper.scrape(cards)
-            print(f"  Successfully scraped {len([p for p in results if p.found])} cards from {vendor_name}")
+            print(f"{vendor_name} - Successfully scraped {len([p for p in results if p.found])} cards")
 
             # Notify completion
             if status_callback:
@@ -91,7 +105,7 @@ class ScraperManager:
             return (vendor_name, results)
 
         except Exception as e:
-            print(f"  Error scraping {vendor_name}: {e}")
+            print(f"{vendor_name} - Error scraping: {e}")
             import traceback
             traceback.print_exc()
 
@@ -234,7 +248,7 @@ class ScraperManager:
             # Scrape each website
             total_scrapers = len(self.scrapers)
             for idx, scraper in enumerate(self.scrapers, 1):
-                print(f"Scraping {scraper.website_name}...")
+                print(f"{scraper.website_name} - Scraping...")
 
                 # Call progress callback if provided
                 if progress_callback:
@@ -243,15 +257,15 @@ class ScraperManager:
                 try:
                     prices = scraper.scrape(cards)
                     all_prices.extend(prices)
-                    print(f"  Successfully scraped {len([p for p in prices if p.found])} cards from {scraper.website_name}")
+                    print(f"{scraper.website_name} - Successfully scraped {len([p for p in prices if p.found])} cards")
                 except Exception as scraper_error:
-                    print(f"  Error scraping {scraper.website_name}: {scraper_error}")
+                    print(f"{scraper.website_name} - Error scraping: {scraper_error}")
                     import traceback
                     traceback.print_exc()
                     # Add not found entries for all cards for this scraper
                     not_found_prices = scraper._create_not_found_prices(cards)
                     all_prices.extend(not_found_prices)
-                    print(f"  Continuing with other scrapers...")
+                    print(f"{scraper.website_name} - Continuing with other scrapers...")
 
             # Analyze results with vendor filtering
             if self.config.vendor_filter.enable_filtering:

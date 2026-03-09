@@ -24,9 +24,9 @@ class FaceToFaceGamesScraper(BaseScraper):
         """Save a screenshot for debugging"""
         try:
             self.driver.save_screenshot(filename)
-            print(f"Debug screenshot saved: {filename}")
+            self.log(f"Debug screenshot saved: {filename}")
         except Exception as e:
-            print(f"Could not save screenshot: {e}")
+            self.log(f"Could not save screenshot: {e}")
 
     def scrape(self, cards: List[Card]) -> List[CardPrice]:
         """Scrape prices from Face to Face Games"""
@@ -191,7 +191,7 @@ class FaceToFaceGamesScraper(BaseScraper):
                         else:
                             time.sleep(0.3)  # Normal wait for others
                     except Exception as e:
-                        print(f"  -> Could not expand group {idx + 1}: {e}")
+                        self.log(f"Could not expand group {idx + 1}: {e}")
 
                     # Get card name from the group title
                     title_elem = group.find_element(

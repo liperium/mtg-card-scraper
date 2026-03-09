@@ -50,7 +50,7 @@ class MagiCarteScraper(BaseScraper):
             )
 
             if not submit_success:
-                print(f"Warning: Could not click submit button for {self.website_name}")
+                self.log("Warning: Could not click submit button")
                 # Try alternative: press Enter on textarea
                 from selenium.webdriver.common.keys import Keys
                 textarea.send_keys(Keys.RETURN)
@@ -61,7 +61,7 @@ class MagiCarteScraper(BaseScraper):
             prices.extend(self._extract_prices(cards))
 
         except Exception as e:
-            print(f"Error scraping {self.website_name}: {e}")
+            self.log(f"Error scraping: {e}")
             # Add not found entries for all cards
             prices.extend(self._create_not_found_prices(cards))
 
@@ -117,7 +117,7 @@ class MagiCarteScraper(BaseScraper):
                     )
 
                 except Exception as e:
-                    print(f"Error parsing card item: {e}")
+                    self.log(f"Error parsing card item: {e}")
 
             # Match found cards with requested cards
             for card in cards:
@@ -145,7 +145,7 @@ class MagiCarteScraper(BaseScraper):
                         prices.append(self._create_not_found_price(card))
 
         except Exception as e:
-            print(f"Error extracting prices from {self.website_name}: {e}")
+            self.log(f"Error extracting prices: {e}")
 
         return prices
 

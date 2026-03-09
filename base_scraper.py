@@ -38,6 +38,15 @@ class BaseScraper(ABC):
         """
         self.driver = driver
 
+    def log(self, message: str):
+        """
+        Log a message with the vendor name prefix
+
+        Args:
+            message: The message to log
+        """
+        print(f"{self.website_name} - {message}")
+
     @property
     @abstractmethod
     def website_name(self) -> str:

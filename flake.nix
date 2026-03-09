@@ -31,9 +31,6 @@
         # Script to run the app with uv
         uvRunScript = pkgs.writeShellScriptBin "mtg-scraper-uv" ''
           cd ${./.}
-          export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
-          export CHROME_BIN="${pkgs.chromium}/bin/chromium"
-          export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
           ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
         '';
 
@@ -43,9 +40,6 @@
           # Default: Use uv (matches your current setup)
           default = pkgs.writeShellScriptBin "mtg-scraper" ''
             cd ${./.}
-            export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
-            export CHROME_BIN="${pkgs.chromium}/bin/chromium"
-            export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
             ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
           '';
 
@@ -56,13 +50,13 @@
           uv = uvRunScript;
         };
 
+
         # Development shell with all tools
         devShells.default = pkgs.mkShell {
           buildInputs = [
             pythonEnv
             pkgs.uv
-            pkgs.chromium
-            pkgs.chromedriver
+            pkgs.chromium # For selenium
           ];
 
           shellHook = ''
@@ -70,10 +64,8 @@
             echo "Run 'streamlit run app.py' to start the app"
             echo "Or use 'uv run streamlit run app.py'"
 
-            # Set Chrome/Chromium and chromedriver paths for Selenium
+            # Set Chrome/Chromium path for Selenium
             export CHROME_BIN="${pkgs.chromium}/bin/chromium"
-            export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
-            export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
           '';
         };
 

@@ -18,7 +18,7 @@
           selenium
         ]);
 
-        # Script to run the app with native Python
+        # Script to run the app with native Python (development)
         runScript = pkgs.writeShellScriptBin "mtg-scraper" ''
           cd ${./.}
           export PYTHONPATH="${./.}:$PYTHONPATH"
@@ -26,6 +26,21 @@
           export CHROME_BIN="${pkgs.chromium}/bin/chromium"
           export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
           ${pythonEnv}/bin/streamlit run app.py "$@"
+        '';
+
+        # Script to run the app with native Python (release)
+        runScriptRelease = pkgs.writeShellScriptBin "mtg-scraper" ''
+          cd ${./.}
+          export PYTHONPATH="${./.}:$PYTHONPATH"
+          export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
+          export CHROME_BIN="${pkgs.chromium}/bin/chromium"
+          export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
+          ${pythonEnv}/bin/streamlit run app.py \
+            --server.headless true \
+            --server.fileWatcherType none \
+            --client.showErrorDetails false \
+            --browser.gatherUsageStats false \
+            "$@"
         '';
 
         # Script to run the app with uv
@@ -43,8 +58,11 @@
             ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
           '';
 
-          # Alternative: Native Python with modules
+          # Alternative: Native Python with modules (dev)
           native = runScript;
+
+          # Native Python release mode
+          nativeRelease = runScriptRelease;
 
           # Explicit uv version
           uv = uvRunScript;
@@ -79,6 +97,11 @@
           native = {
             type = "app";
             program = "${self.packages.${system}.native}/bin/mtg-scraper";
+          };
+
+          nativeRelease = {
+            type = "app";
+            program = "${self.packages.${system}.nativeRelease}/bin/mtg-scraper";
           };
 
           uv = {

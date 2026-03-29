@@ -171,8 +171,12 @@ class ScraperManager:
             # Match pattern: quantity name (set) number [*F*]
             # Example: 1 Adagia, Windswept Bastion (EOE) 250
             # Example: Liberty Prime, Recharged (PIP) 5 *F*
-            pattern = r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
-            match = re.match(pattern, line.strip())
+            pattern_with_qty = r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+            # Pattern without quantity (defaults to 1)
+            # Example: Lightning Bolt (2XM) 141
+            pattern_no_qty = r"^([A-Za-z].+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+
+            match = re.match(pattern_with_qty, line.strip())
             if match:
                 quantity = int(match.group(1))
                 name = match.group(2).strip()
@@ -186,6 +190,22 @@ class ScraperManager:
                         collector_number=collector_number,
                     )
                 )
+            else:
+                # Try pattern without quantity (default to 1)
+                match = re.match(pattern_no_qty, line.strip())
+                if match:
+                    quantity = 1
+                    name = match.group(1).strip()
+                    set_code = match.group(2) if match.group(2) else None
+                    collector_number = match.group(3) if match.group(3) else None
+                    cards.append(
+                        Card(
+                            quantity=quantity,
+                            name=name,
+                            set_code=set_code,
+                            collector_number=collector_number,
+                        )
+                    )
 
         return cards
 

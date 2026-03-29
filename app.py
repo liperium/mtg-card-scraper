@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import re
 from scraper_manager import ScraperManager
 from scraper_config import create_custom_config
 from scrapers import CryptMTGScraper, MagiCarteScraper, FaceToFaceGamesScraper
@@ -129,10 +130,32 @@ with col2:
         reset_app()
         st.rerun()
 
+# Parse and show card count preview
+parsed_card_count = 0
+if card_input.strip():
+    # Use the same parsing logic to show how many cards will be searched
+    lines = card_input.strip().split("\n")
+    for line in lines:
+        if not line.strip():
+            continue
+        # Pattern with quantity at start
+        pattern_with_qty = r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+        # Pattern without quantity (defaults to 1)
+        pattern_no_qty = r"^([A-Za-z].+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+        if re.match(pattern_with_qty, line.strip()) or re.match(pattern_no_qty, line.strip()):
+            parsed_card_count += 1
+
+    if parsed_card_count > 0:
+        st.info(f"📋 {parsed_card_count} card(s) detected from input")
+    elif card_input.strip():
+        st.warning("⚠️ No valid cards detected. Check your format (e.g., '1 Lightning Bolt (2XM) 141')")
+
 # Scrape button
 if st.button("🔍 Find Best Prices", use_container_width=True, type="primary"):
     if not card_input.strip():
         st.error("Please enter at least one card!")
+    elif parsed_card_count == 0:
+        st.error("No valid cards detected! Please check your format (e.g., '1 Lightning Bolt (2XM) 141')")
     elif not (use_cryptmtg or use_magicarte or use_f2f):
         st.error("Please enable at least one scraper!")
     else:

@@ -3,7 +3,8 @@ import pandas as pd
 import re
 from scraper_manager import ScraperManager
 from scraper_config import create_custom_config
-from scrapers import CryptMTGScraper, MagiCarteScraper, FaceToFaceGamesScraper
+from vendors import CryptMTGVendor, MagiCarteVendor, FaceToFaceGamesVendor
+from cart import CartHandler
 import time
 
 # Page configuration
@@ -139,43 +140,51 @@ if card_input.strip():
         if not line.strip():
             continue
         # Pattern with quantity at start
-        pattern_with_qty = r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+        pattern_with_qty = (
+            r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+        )
         # Pattern without quantity (defaults to 1)
         pattern_no_qty = r"^([A-Za-z].+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
-        if re.match(pattern_with_qty, line.strip()) or re.match(pattern_no_qty, line.strip()):
+        if re.match(pattern_with_qty, line.strip()) or re.match(
+            pattern_no_qty, line.strip()
+        ):
             parsed_card_count += 1
 
     if parsed_card_count > 0:
         st.info(f"📋 {parsed_card_count} card(s) detected from input")
     elif card_input.strip():
-        st.warning("⚠️ No valid cards detected. Check your format (e.g., '1 Lightning Bolt (2XM) 141')")
+        st.warning(
+            "⚠️ No valid cards detected. Check your format (e.g., '1 Lightning Bolt (2XM) 141')"
+        )
 
 # Scrape button
 if st.button("🔍 Find Best Prices", use_container_width=True, type="primary"):
     if not card_input.strip():
         st.error("Please enter at least one card!")
     elif parsed_card_count == 0:
-        st.error("No valid cards detected! Please check your format (e.g., '1 Lightning Bolt (2XM) 141')")
+        st.error(
+            "No valid cards detected! Please check your format (e.g., '1 Lightning Bolt (2XM) 141')"
+        )
     elif not (use_cryptmtg or use_magicarte or use_f2f):
         st.error("Please enable at least one scraper!")
     else:
         st.session_state.scraping = True
 
-        # Build scraper list (in preferred order)
-        enabled_scrapers = []
+        # Build vendor list (in preferred order)
+        enabled_vendors = []
         if use_magicarte:
-            enabled_scrapers.append(MagiCarteScraper)
+            enabled_vendors.append(MagiCarteVendor)
         if use_cryptmtg:
-            enabled_scrapers.append(CryptMTGScraper)
+            enabled_vendors.append(CryptMTGVendor)
         if use_f2f:
-            enabled_scrapers.append(FaceToFaceGamesScraper)
+            enabled_vendors.append(FaceToFaceGamesVendor)
 
         try:
             # Show loading message
             with st.spinner("🔄 Scraping all vendors in parallel..."):
                 # Create configuration (no filtering at this stage)
                 config = create_custom_config(
-                    scrapers=enabled_scrapers,
+                    scrapers=enabled_vendors,
                     min_cards=1,
                     price_override=0.0,
                     enable_filtering=False,
@@ -191,8 +200,7 @@ if st.button("🔍 Find Best Prices", use_container_width=True, type="primary"):
 
                 # Perform parallel scraping (no callback - can't update UI from threads)
                 raw_results = manager.scrape_all_parallel(
-                    cards=parsed_cards,
-                    status_callback=None
+                    cards=parsed_cards, status_callback=None
                 )
 
             # Store raw results in session state
@@ -225,7 +233,9 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
     vendor_cols = st.columns(len(st.session_state.raw_vendor_results))
     selected_vendors_dict = {}
 
-    for idx, (vendor_name, results) in enumerate(st.session_state.raw_vendor_results.items()):
+    for idx, (vendor_name, results) in enumerate(
+        st.session_state.raw_vendor_results.items()
+    ):
         with vendor_cols[idx]:
             cards_found = len([p for p in results if p.found])
             total_cards = len(st.session_state.parsed_cards)
@@ -238,7 +248,9 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
             st.caption(f"{cards_found}/{total_cards} cards found")
 
     # Filter to only checked vendors
-    active_vendors = [name for name, checked in selected_vendors_dict.items() if checked]
+    active_vendors = [
+        name for name, checked in selected_vendors_dict.items() if checked
+    ]
 
     if active_vendors:
         # Vendor preferences section
@@ -253,7 +265,7 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
                 options=active_vendors,
                 default=active_vendors,
                 help="Select vendors in order of preference (top = most preferred). We'll try to buy from preferred vendors first.",
-                key="vendor_preference_order"
+                key="vendor_preference_order",
             )
 
         with col2:
@@ -264,11 +276,13 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
                 value=1.0,
                 step=0.25,
                 help="If a card costs at most $X more at a preferred vendor, buy it there instead of the cheapest vendor.",
-                key="preference_threshold"
+                key="preference_threshold",
             )
 
         # Use vendor preference order, or default to active vendors if empty
-        final_preferences = vendor_preference_order if vendor_preference_order else active_vendors
+        final_preferences = (
+            vendor_preference_order if vendor_preference_order else active_vendors
+        )
         final_threshold = preference_threshold
 
         # Recalculate results based on selections
@@ -278,7 +292,7 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
             parsed_cards=st.session_state.parsed_cards,
             selected_vendors=active_vendors,
             vendor_preferences=final_preferences,
-            preference_threshold=final_threshold
+            preference_threshold=final_threshold,
         )
         st.session_state.df = format_results_to_dataframe(st.session_state.results)
     else:
@@ -295,7 +309,9 @@ if st.session_state.results and st.session_state.df is not None:
 
     # Show how many vendors are selected
     if st.session_state.raw_vendor_results:
-        active_count = len([name for name, checked in selected_vendors_dict.items() if checked])
+        active_count = len(
+            [name for name, checked in selected_vendors_dict.items() if checked]
+        )
         total_count = len(st.session_state.raw_vendor_results)
         st.caption(f"Buying from {active_count} of {total_count} vendors")
 
@@ -386,15 +402,68 @@ if st.session_state.results and st.session_state.df is not None:
                 total = st.session_state.results["summary"][website]["total_price"]
                 st.markdown(f"**Total for {website}: ${total:.2f}**")
 
+    # Add to Cart section
+    st.markdown("---")
+    st.subheader("🚀 Add to Cart")
+
+    cart_handler = CartHandler()
+
+    # Check if clipboard is available
+    if not cart_handler.is_clipboard_available():
+        st.warning(
+            "Clipboard functionality not available. "
+            "Install pyperclip: `pip install pyperclip`"
+        )
+
+    store_cols = st.columns(len(st.session_state.results["buy_lists"]))
+
+    for idx, (store_name, store_buy_list) in enumerate(
+        st.session_state.results["buy_lists"].items()
+    ):
+        if store_buy_list:
+            with store_cols[idx]:
+                if st.button(
+                    f"Open {store_name}",
+                    key=f"open_cart_{store_name}",
+                    use_container_width=True,
+                ):
+                    result = cart_handler.open_store(store_name, store_buy_list)
+                    if result.success:
+                        if result.supports_bulk_add:
+                            st.success("Opened! Paste & Add All")
+                        else:
+                            st.info("Opened! Add manually")
+                    else:
+                        st.error(result.error)
+
+    # Expandable section showing card lists for manual copy
+    with st.expander("View/Copy Card Lists"):
+        for store_name, store_buy_list in st.session_state.results["buy_lists"].items():
+            if store_buy_list:
+                card_list = cart_handler.get_card_list_for_store(
+                    store_name, store_buy_list
+                )
+                if card_list:
+                    st.text_area(
+                        f"{store_name}",
+                        value=card_list,
+                        height=100,
+                        key=f"cart_list_{store_name}",
+                    )
+
     # Cards not found
     if st.session_state.results.get("not_found"):
         st.markdown("---")
         st.subheader("❌ Cards Not Found")
 
         # Show which vendors were searched
-        if st.session_state.raw_vendor_results and 'selected_vendors_dict' in locals():
-            active_vendors_list = [name for name, checked in selected_vendors_dict.items() if checked]
-            st.caption(f"These cards were not found in your selected vendors: {', '.join(active_vendors_list)}")
+        if st.session_state.raw_vendor_results and "selected_vendors_dict" in locals():
+            active_vendors_list = [
+                name for name, checked in selected_vendors_dict.items() if checked
+            ]
+            st.caption(
+                f"These cards were not found in your selected vendors: {', '.join(active_vendors_list)}"
+            )
 
         # Create DataFrame for not found cards
         not_found_data = []

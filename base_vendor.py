@@ -26,43 +26,59 @@ class CardPrice:
     quantity_available: int = 0
 
 
-class BaseScraper(ABC):
-    """Abstract base class for all website scrapers"""
+@dataclass
+class CartItem:
+    """Represents a card to add to cart"""
 
-    def __init__(self, driver: webdriver.Chrome):
+    card_name: str
+    quantity: int
+    price_per_unit: float
+    total_price: float
+
+
+class BaseVendor(ABC):
+    """Abstract base class for all vendor scrapers and cart formatters"""
+
+    def __init__(self, driver: webdriver.Chrome = None):
         """
-        Initialize the scraper with a shared Chrome WebDriver instance
+        Initialize the vendor with an optional Chrome WebDriver instance.
 
         Args:
-            driver: Selenium WebDriver instance to use for scraping
+            driver: Selenium WebDriver instance (only needed for scraping)
         """
         self.driver = driver
 
     def log(self, message: str):
         """
-        Log a message with the vendor name prefix
+        Log a message with the vendor name prefix.
 
         Args:
             message: The message to log
         """
-        print(f"{self.website_name} - {message}")
+        print(f"{self.name} - {message}")
 
     @property
     @abstractmethod
-    def website_name(self) -> str:
-        """Return the display name of the website"""
+    def name(self) -> str:
+        """Return the display name of the vendor"""
         pass
 
     @property
     @abstractmethod
-    def website_url(self) -> str:
-        """Return the URL of the deck builder/search page"""
+    def deck_builder_url(self) -> str:
+        """Return the URL of the deck builder page"""
+        pass
+
+    @property
+    @abstractmethod
+    def supports_bulk_add(self) -> bool:
+        """Return True if the store has an 'Add All to Cart' button"""
         pass
 
     @abstractmethod
     def scrape(self, cards: List[Card]) -> List[CardPrice]:
         """
-        Scrape prices for the given cards from this website
+        Scrape prices for the given cards from this vendor.
 
         Args:
             cards: List of Card objects to search for
@@ -72,20 +88,37 @@ class BaseScraper(ABC):
         """
         pass
 
-    def is_enabled(self) -> bool:
+    def format_card_list(self, items: List[CartItem]) -> str:
         """
-        Check if this scraper should be used
-        Override this method if you want dynamic enabling/disabling
+        Format items for this store's deck builder textarea.
+        Default format: {quantity} {card_name}
+        Override in subclasses if store requires different format.
+
+        Args:
+            items: List of CartItem objects to format
 
         Returns:
-            True if scraper should be used, False otherwise
+            Formatted string ready to paste into deck builder
+        """
+        lines = []
+        for item in items:
+            lines.append(f"{item.quantity} {item.card_name}")
+        return "\n".join(lines)
+
+    def is_enabled(self) -> bool:
+        """
+        Check if this vendor should be used.
+        Override this method if you want dynamic enabling/disabling.
+
+        Returns:
+            True if vendor should be used, False otherwise
         """
         return True
 
     def get_priority(self) -> int:
         """
-        Get the priority of this scraper (lower = higher priority)
-        Used for ordering scrapers when multiple options exist
+        Get the priority of this vendor (lower = higher priority).
+        Used for ordering vendors when multiple options exist.
 
         Returns:
             Priority value (default: 100)
@@ -94,7 +127,7 @@ class BaseScraper(ABC):
 
     def _create_not_found_price(self, card: Card) -> CardPrice:
         """
-        Helper method to create a CardPrice for a card that wasn't found
+        Helper method to create a CardPrice for a card that wasn't found.
 
         Args:
             card: Card that wasn't found
@@ -106,13 +139,13 @@ class BaseScraper(ABC):
             card_name=card.name,
             original_query=card.name,
             price=float("inf"),
-            website=self.website_name,
+            website=self.name,
             found=False,
         )
 
     def _create_not_found_prices(self, cards: List[Card]) -> List[CardPrice]:
         """
-        Helper method to create CardPrice list for cards that weren't found
+        Helper method to create CardPrice list for cards that weren't found.
 
         Args:
             cards: List of cards that weren't found

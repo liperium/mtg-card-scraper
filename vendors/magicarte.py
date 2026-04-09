@@ -4,27 +4,31 @@ from typing import List
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from base_scraper import BaseScraper, Card, CardPrice
-from scraper_utils import safe_click, wait_and_click, remove_overlays
+from base_vendor import BaseVendor, Card, CardPrice
+from scraper_utils import wait_and_click, remove_overlays
 
 
-class MagiCarteScraper(BaseScraper):
-    """Scraper for MagiCarte Store website"""
+class MagiCarteVendor(BaseVendor):
+    """Vendor implementation for MagiCarte Store"""
 
     @property
-    def website_name(self) -> str:
+    def name(self) -> str:
         return "MagiCarte"
 
     @property
-    def website_url(self) -> str:
+    def deck_builder_url(self) -> str:
         return "https://magicartestore.com/pages/test-deck-list"
+
+    @property
+    def supports_bulk_add(self) -> bool:
+        return True
 
     def scrape(self, cards: List[Card]) -> List[CardPrice]:
         """Scrape prices from MagiCarte"""
         prices = []
 
         try:
-            self.driver.get(self.website_url)
+            self.driver.get(self.deck_builder_url)
             time.sleep(2)  # Wait for initial load
 
             # Remove any overlays that might block clicks
@@ -111,7 +115,7 @@ class MagiCarteScraper(BaseScraper):
                         card_name=card_name,
                         original_query=card_name,
                         price=price,
-                        website=self.website_name,
+                        website=self.name,
                         found=True,
                         quantity_available=available,
                     )

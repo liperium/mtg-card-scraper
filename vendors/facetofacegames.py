@@ -2,23 +2,26 @@ import time
 import re
 from typing import List
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from base_scraper import BaseScraper, Card, CardPrice
-from scraper_utils import safe_click, wait_and_click, remove_overlays
+from base_vendor import BaseVendor, Card, CardPrice
+from scraper_utils import wait_and_click, remove_overlays
 
 
-class FaceToFaceGamesScraper(BaseScraper):
-    """Scraper for Face to Face Games website"""
+class FaceToFaceGamesVendor(BaseVendor):
+    """Vendor implementation for Face to Face Games"""
 
     @property
-    def website_name(self) -> str:
+    def name(self) -> str:
         return "Face to Face Games"
 
     @property
-    def website_url(self) -> str:
+    def deck_builder_url(self) -> str:
         return "https://facetofacegames.com/pages/deck-builder"
+
+    @property
+    def supports_bulk_add(self) -> bool:
+        return False
 
     def _save_debug_screenshot(self, filename="f2f_debug.png"):
         """Save a screenshot for debugging"""
@@ -33,7 +36,7 @@ class FaceToFaceGamesScraper(BaseScraper):
         prices = []
 
         try:
-            self.driver.get(self.website_url)
+            self.driver.get(self.deck_builder_url)
             time.sleep(2)  # Wait for initial load and Alpine.js to initialize
 
             # Remove any overlays that might block clicks
@@ -298,7 +301,7 @@ class FaceToFaceGamesScraper(BaseScraper):
                             card_name=card_name,
                             original_query=card_name,
                             price=best_price,
-                            website=self.website_name,
+                            website=self.name,
                             found=True,
                             quantity_available=best_quantity,
                         )

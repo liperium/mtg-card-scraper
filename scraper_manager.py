@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Callable, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from base_scraper import Card, CardPrice, BaseScraper
+from base_vendor import Card, CardPrice, BaseVendor
 from scraper_config import ScraperConfig, VendorFilterConfig
 
 
@@ -20,7 +20,7 @@ class ScraperManager:
         """
         self.config = config
         self.driver = None
-        self.scrapers: List[BaseScraper] = []
+        self.scrapers: List[BaseVendor] = []
 
     def _initialize_driver(self) -> webdriver.Chrome:
         """Create a fresh ChromeDriver instance with standard options"""
@@ -80,7 +80,7 @@ class ScraperManager:
             scraper = scraper_class(driver)
 
             # Get vendor name from instance
-            vendor_name = scraper.website_name
+            vendor_name = scraper.name
 
             # Notify starting
             if status_callback:
@@ -268,24 +268,24 @@ class ScraperManager:
             # Scrape each website
             total_scrapers = len(self.scrapers)
             for idx, scraper in enumerate(self.scrapers, 1):
-                print(f"{scraper.website_name} - Scraping...")
+                print(f"{scraper.name} - Scraping...")
 
                 # Call progress callback if provided
                 if progress_callback:
-                    progress_callback(idx, total_scrapers, f"Scraping {scraper.website_name}...")
+                    progress_callback(idx, total_scrapers, f"Scraping {scraper.name}...")
 
                 try:
                     prices = scraper.scrape(cards)
                     all_prices.extend(prices)
-                    print(f"{scraper.website_name} - Successfully scraped {len([p for p in prices if p.found])} cards")
+                    print(f"{scraper.name} - Successfully scraped {len([p for p in prices if p.found])} cards")
                 except Exception as scraper_error:
-                    print(f"{scraper.website_name} - Error scraping: {scraper_error}")
+                    print(f"{scraper.name} - Error scraping: {scraper_error}")
                     import traceback
                     traceback.print_exc()
                     # Add not found entries for all cards for this scraper
                     not_found_prices = scraper._create_not_found_prices(cards)
                     all_prices.extend(not_found_prices)
-                    print(f"{scraper.website_name} - Continuing with other scrapers...")
+                    print(f"{scraper.name} - Continuing with other scrapers...")
 
             # Analyze results with vendor filtering
             if self.config.vendor_filter.enable_filtering:

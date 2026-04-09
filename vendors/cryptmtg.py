@@ -4,28 +4,32 @@ from typing import List
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from base_scraper import BaseScraper, Card, CardPrice
-from scraper_utils import safe_click, wait_and_click, remove_overlays
+from base_vendor import BaseVendor, Card, CardPrice
+from scraper_utils import wait_and_click, remove_overlays
 
 
-class CryptMTGScraper(BaseScraper):
-    """Scraper for CryptMTG website"""
+class CryptMTGVendor(BaseVendor):
+    """Vendor implementation for CryptMTG"""
 
     @property
-    def website_name(self) -> str:
+    def name(self) -> str:
         return "CryptMTG"
 
     @property
-    def website_url(self) -> str:
+    def deck_builder_url(self) -> str:
         return "https://cryptmtg.com/pages/deck-building"
+
+    @property
+    def supports_bulk_add(self) -> bool:
+        return True
 
     def scrape(self, cards: List[Card]) -> List[CardPrice]:
         """Scrape prices from CryptMTG"""
         prices = []
 
         try:
-            self.log(f"Loading {self.website_url}...")
-            self.driver.get(self.website_url)
+            self.log(f"Loading {self.deck_builder_url}...")
+            self.driver.get(self.deck_builder_url)
             time.sleep(3)  # Wait for initial load
 
             self.log("Page loaded, looking for textarea...")
@@ -125,7 +129,7 @@ class CryptMTGScraper(BaseScraper):
                         card_name=card_name,
                         original_query=card_name,
                         price=price,
-                        website=self.website_name,
+                        website=self.name,
                         found=True,
                         quantity_available=available,
                     )

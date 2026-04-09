@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Type
-from base_scraper import BaseScraper
+from base_vendor import BaseVendor
 
 
 @dataclass
@@ -38,8 +38,8 @@ class VendorPreferenceConfig:
 class ScraperConfig:
     """Main configuration for the scraper system"""
 
-    # List of scraper classes to use
-    enabled_scrapers: List[Type[BaseScraper]]
+    # List of vendor classes to use
+    enabled_scrapers: List[Type[BaseVendor]]
 
     # Vendor filtering configuration
     vendor_filter: VendorFilterConfig
@@ -68,18 +68,18 @@ DEFAULT_CONFIG = ScraperConfig(
 
 def create_default_config() -> ScraperConfig:
     """
-    Create a default configuration with all available scrapers
+    Create a default configuration with all available vendors
 
     Returns:
-        ScraperConfig with all scrapers enabled
+        ScraperConfig with all vendors enabled
     """
-    from scrapers import CryptMTGScraper, MagiCarteScraper, FaceToFaceGamesScraper
+    from vendors import CryptMTGVendor, MagiCarteVendor, FaceToFaceGamesVendor
 
     return ScraperConfig(
         enabled_scrapers=[
-            CryptMTGScraper,
-            MagiCarteScraper,
-            FaceToFaceGamesScraper,
+            CryptMTGVendor,
+            MagiCarteVendor,
+            FaceToFaceGamesVendor,
         ],
         vendor_filter=VendorFilterConfig(
             min_cards_per_vendor=3,
@@ -91,7 +91,7 @@ def create_default_config() -> ScraperConfig:
 
 
 def create_custom_config(
-    scrapers: List[Type[BaseScraper]] = None,
+    scrapers: List[Type[BaseVendor]] = None,
     min_cards: int = 3,
     price_override: float = 5.0,
     enable_filtering: bool = True,
@@ -101,7 +101,7 @@ def create_custom_config(
     Create a custom configuration
 
     Args:
-        scrapers: List of scraper classes to use (None = all)
+        scrapers: List of vendor classes to use (None = all)
         min_cards: Minimum cards per vendor
         price_override: Price difference to override min_cards rule
         enable_filtering: Enable vendor filtering
@@ -111,9 +111,9 @@ def create_custom_config(
         Custom ScraperConfig
     """
     if scrapers is None:
-        from scrapers import CryptMTGScraper, MagiCarteScraper, FaceToFaceGamesScraper
+        from vendors import CryptMTGVendor, MagiCarteVendor, FaceToFaceGamesVendor
 
-        scrapers = [CryptMTGScraper, MagiCarteScraper, FaceToFaceGamesScraper]
+        scrapers = [CryptMTGVendor, MagiCarteVendor, FaceToFaceGamesVendor]
 
     return ScraperConfig(
         enabled_scrapers=scrapers,

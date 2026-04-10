@@ -23,6 +23,14 @@ class FaceToFaceGamesVendor(BaseVendor):
     def supports_bulk_add(self) -> bool:
         return False
 
+    @property
+    def shipping_cost(self) -> float:
+        return 10.0
+
+    @property
+    def fulfillment_label(self) -> str:
+        return "Shipping +$10"
+
     def _save_debug_screenshot(self, filename="f2f_debug.png"):
         """Save a screenshot for debugging"""
         try:

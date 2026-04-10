@@ -105,6 +105,19 @@ class BaseVendor(ABC):
             lines.append(f"{item.quantity} {item.card_name}")
         return "\n".join(lines)
 
+    @property
+    def shipping_cost(self) -> float:
+        """
+        Flat shipping cost for this vendor (added once per order, not per card).
+        0.0 means local pickup. Override in vendors that charge shipping.
+        """
+        return 0.0
+
+    @property
+    def fulfillment_label(self) -> str:
+        """Human-readable fulfillment method shown in the UI."""
+        return "Local Pickup"
+
     def is_enabled(self) -> bool:
         """
         Check if this vendor should be used.

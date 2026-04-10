@@ -14,6 +14,9 @@ from vendors import (
     CryptMTGVendor,
     MagiCarteVendor,
     FaceToFaceGamesVendor,
+    ImaginaireVendor,
+    MythicStoreVendor,
+    GodsArenaVendor,
 )
 
 
@@ -33,8 +36,11 @@ class CartHandler:
 
     # Registry mapping store display names to vendors
     VENDORS = {
-        "CryptMTG": CryptMTGVendor(),
         "MagiCarte": MagiCarteVendor(),
+        "CryptMTG": CryptMTGVendor(),
+        "Imaginaire": ImaginaireVendor(),
+        "Mythic Store": MythicStoreVendor(),
+        "Arène des Dieux": GodsArenaVendor(),
         "Face to Face Games": FaceToFaceGamesVendor(),
     }
 

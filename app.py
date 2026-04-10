@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from scraper_manager import ScraperManager
 from scraper_config import create_custom_config
-from vendors import CryptMTGVendor, MagiCarteVendor, FaceToFaceGamesVendor
+from vendors import CryptMTGVendor, MagiCarteVendor, FaceToFaceGamesVendor, ImaginaireVendor, MythicStoreVendor, GodsArenaVendor
 from cart import CartHandler
 import time
 
@@ -98,7 +98,7 @@ def format_buy_lists(results):
 # App title and description
 st.markdown('<p class="big-font">🃏 MTG Card Price Scraper</p>', unsafe_allow_html=True)
 st.markdown(
-    "Compare prices from **CryptMTG**, **MagiCarte**, and **Face to Face Games** to find the best deals!"
+    "Compare prices from **MagiCarte**, **CryptMTG**, **Imaginaire**, **Mythic Store**, **Arène des Dieux**, and **Face to Face Games** to find the best deals!"
 )
 
 # Sidebar for configuration
@@ -108,6 +108,9 @@ st.sidebar.header("⚙️ Configuration")
 st.sidebar.subheader("Enabled Scrapers")
 use_magicarte = st.sidebar.checkbox("MagiCarte", value=True)
 use_cryptmtg = st.sidebar.checkbox("CryptMTG", value=True)
+use_imaginaire = st.sidebar.checkbox("Imaginaire", value=True)
+use_mythic = st.sidebar.checkbox("Mythic Store", value=True)
+use_godsarena = st.sidebar.checkbox("Arène des Dieux", value=True)
 use_f2f = st.sidebar.checkbox("Face to Face Games", value=True)
 
 # Create two columns for input and reset button
@@ -165,7 +168,7 @@ if st.button("🔍 Find Best Prices", use_container_width=True, type="primary"):
         st.error(
             "No valid cards detected! Please check your format (e.g., '1 Lightning Bolt (2XM) 141')"
         )
-    elif not (use_cryptmtg or use_magicarte or use_f2f):
+    elif not (use_cryptmtg or use_magicarte or use_f2f or use_imaginaire or use_mythic or use_godsarena):
         st.error("Please enable at least one scraper!")
     else:
         st.session_state.scraping = True
@@ -176,6 +179,12 @@ if st.button("🔍 Find Best Prices", use_container_width=True, type="primary"):
             enabled_vendors.append(MagiCarteVendor)
         if use_cryptmtg:
             enabled_vendors.append(CryptMTGVendor)
+        if use_imaginaire:
+            enabled_vendors.append(ImaginaireVendor)
+        if use_mythic:
+            enabled_vendors.append(MythicStoreVendor)
+        if use_godsarena:
+            enabled_vendors.append(GodsArenaVendor)
         if use_f2f:
             enabled_vendors.append(FaceToFaceGamesVendor)
 
@@ -230,6 +239,10 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
     st.markdown("#### Select Vendors")
     st.caption("Check the vendors you want to include in your buy list.")
 
+    # Build vendor metadata (shipping costs and labels) from CartHandler registry
+    vendor_shipping_costs = {name: v.shipping_cost for name, v in CartHandler.VENDORS.items()}
+    vendor_labels = {name: v.fulfillment_label for name, v in CartHandler.VENDORS.items()}
+
     vendor_cols = st.columns(len(st.session_state.raw_vendor_results))
     selected_vendors_dict = {}
 
@@ -246,44 +259,84 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
                 key=f"vendor_select_{vendor_name}",
             )
             st.caption(f"{cards_found}/{total_cards} cards found")
+            label = vendor_labels.get(vendor_name, "")
+            if label:
+                icon = "📍" if "Local" in label else "🚚"
+                st.caption(f"{icon} {label}")
 
-    # Filter to only checked vendors
-    active_vendors = [
-        name for name, checked in selected_vendors_dict.items() if checked
-    ]
+    # Filter to only checked vendors, sorted by canonical display order
+    _VENDOR_ORDER = ["MagiCarte", "CryptMTG", "Imaginaire", "Mythic Store", "Arène des Dieux", "Face to Face Games"]
+    active_vendors = sorted(
+        (name for name, checked in selected_vendors_dict.items() if checked),
+        key=lambda v: _VENDOR_ORDER.index(v) if v in _VENDOR_ORDER else len(_VENDOR_ORDER),
+    )
+
+    # Card coverage summary for the current vendor selection
+    if active_vendors and st.session_state.parsed_cards:
+        total_card_count = len(st.session_state.parsed_cards)
+        covered_count = sum(
+            1 for card in st.session_state.parsed_cards
+            if any(
+                any(p.found and p.original_query == card.name
+                    for p in st.session_state.raw_vendor_results.get(v, []))
+                for v in active_vendors
+            )
+        )
+        st.caption(f"Selection covers **{covered_count}/{total_card_count}** cards")
 
     if active_vendors:
-        # Vendor preferences section
+        # Order settings section
         st.markdown("---")
-        st.markdown("#### 🎯 Vendor Preferences")
+        st.markdown("#### ⚙️ Order Settings")
 
-        col1, col2 = st.columns(2)
+        # Per-vendor weight multipliers
+        st.caption("Adjust store bias (lower weight = more likely to buy from that store)")
+        weight_cols = st.columns(len(active_vendors))
+        vendor_weights = {}
+        weight_options = {
+            "⭐ Preferred ×0.85": 0.85,
+            "Normal ×1.0": 1.0,
+            "🔽 Deprioritize ×1.2": 1.2,
+        }
+        for idx, vendor_name in enumerate(active_vendors):
+            with weight_cols[idx]:
+                choice = st.selectbox(
+                    vendor_name,
+                    options=list(weight_options.keys()),
+                    index=1,
+                    key=f"weight_{vendor_name}",
+                    label_visibility="visible",
+                )
+                vendor_weights[vendor_name] = weight_options[choice]
 
-        with col1:
-            vendor_preference_order = st.multiselect(
-                "Preferred Vendor Order",
-                options=active_vendors,
-                default=active_vendors,
-                help="Select vendors in order of preference (top = most preferred). We'll try to buy from preferred vendors first.",
-                key="vendor_preference_order",
-            )
-
-        with col2:
-            preference_threshold = st.slider(
-                "Preference Threshold ($)",
+        order_col1, order_col2 = st.columns(2)
+        with order_col1:
+            consolidation_budget = st.slider(
+                "Consolidation budget ($)",
                 min_value=0.0,
-                max_value=10.0,
-                value=1.0,
-                step=0.25,
-                help="If a card costs at most $X more at a preferred vendor, buy it there instead of the cheapest vendor.",
-                key="preference_threshold",
+                max_value=20.0,
+                value=0.0,
+                step=0.50,
+                help=(
+                    "If dropping a store costs less than this in total (each of its cards "
+                    "moves to its cheapest remaining alternative), that store is eliminated. "
+                    "Raise this to reduce the number of separate orders."
+                ),
+                key="consolidation_budget",
             )
-
-        # Use vendor preference order, or default to active vendors if empty
-        final_preferences = (
-            vendor_preference_order if vendor_preference_order else active_vendors
-        )
-        final_threshold = preference_threshold
+        with order_col2:
+            min_cards = st.slider(
+                "Minimum cards per store",
+                min_value=1,
+                max_value=10,
+                value=1,
+                step=1,
+                help=(
+                    "Stores with fewer cards than this will have their cards redistributed "
+                    "to other stores. Raise this to avoid small fragmented orders."
+                ),
+                key="min_cards_per_vendor",
+            )
 
         # Recalculate results based on selections
         manager = ScraperManager(create_custom_config(scrapers=[], headless=True))
@@ -291,9 +344,20 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
             all_vendor_results=st.session_state.raw_vendor_results,
             parsed_cards=st.session_state.parsed_cards,
             selected_vendors=active_vendors,
-            vendor_preferences=final_preferences,
-            preference_threshold=final_threshold,
+            vendor_shipping_costs=vendor_shipping_costs,
+            vendor_weights=vendor_weights,
+            min_cards_per_vendor=min_cards,
+            consolidation_budget=consolidation_budget,
         )
+
+        # Sort buy_lists and summary to match canonical vendor order
+        for key in ("buy_lists", "summary"):
+            if key in st.session_state.results:
+                data = st.session_state.results[key]
+                st.session_state.results[key] = {
+                    v: data[v] for v in _VENDOR_ORDER if v in data
+                }
+
         st.session_state.df = format_results_to_dataframe(st.session_state.results)
     else:
         st.warning("⚠️ Please select at least one vendor to see results.")
@@ -322,21 +386,27 @@ if st.session_state.results and st.session_state.df is not None:
             st.session_state.results["summary"].items()
         ):
             with cols[idx]:
+                shipping = summary.get("shipping_cost", 0.0)
+                effective = summary.get("effective_total", summary["total_price"])
+                cards_label = f"{summary['total_cards']} cards"
+                if shipping > 0:
+                    cards_label += f" + ${shipping:.0f} shipping"
                 st.metric(
                     label=website,
-                    value=f"${summary['total_price']:.2f}",
-                    delta=f"{summary['total_cards']} cards",
+                    value=f"${effective:.2f}",
+                    delta=cards_label,
                 )
 
-        # Grand total
+        # Grand total (sum of effective totals including shipping)
         grand_total = sum(
-            s["total_price"] for s in st.session_state.results["summary"].values()
+            s.get("effective_total", s["total_price"])
+            for s in st.session_state.results["summary"].values()
         )
         with cols[-1]:
             st.metric(
                 label="🎯 Best Deal Total",
                 value=f"${grand_total:.2f}",
-                delta="Optimal buying",
+                delta="Incl. shipping",
             )
 
     # Best prices table
@@ -399,8 +469,14 @@ if st.session_state.results and st.session_state.df is not None:
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
                 # Calculate and display total
-                total = st.session_state.results["summary"][website]["total_price"]
-                st.markdown(f"**Total for {website}: ${total:.2f}**")
+                site_summary = st.session_state.results["summary"][website]
+                total = site_summary["total_price"]
+                shipping = site_summary.get("shipping_cost", 0.0)
+                effective = site_summary.get("effective_total", total)
+                if shipping > 0:
+                    st.markdown(f"**Cards: ${total:.2f} + Shipping: ${shipping:.2f} = Total: ${effective:.2f}**")
+                else:
+                    st.markdown(f"**Total for {website}: ${total:.2f}** 📍 Local Pickup")
 
     # Add to Cart section
     st.markdown("---")
@@ -478,7 +554,7 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>Made with Streamlit | Scraping CryptMTG, MagiCarte & Face to Face Games</p>
+        <p>Made with Streamlit | Scraping MagiCarte, CryptMTG, Imaginaire, Mythic Store, Arène des Dieux & Face to Face Games</p>
     </div>
     """,
     unsafe_allow_html=True,

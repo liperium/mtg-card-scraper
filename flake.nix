@@ -103,6 +103,7 @@
           streamlit
           pandas
           selenium
+          pyperclip
         ]);
 
         # Script to run the app with native Python (development)

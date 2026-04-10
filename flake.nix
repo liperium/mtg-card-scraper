@@ -105,7 +105,8 @@
           selenium
           pyperclip
           setuptools
-        ] ++ [ ps."undetected-chromedriver" ps."streamlit-sortables" ]);
+          undetected-chromedriver
+        ]);
 
         # Script to run the app with native Python (development)
         runScript = pkgs.writeShellScriptBin "mtg-scraper" ''

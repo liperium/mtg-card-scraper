@@ -93,7 +93,8 @@
             in
             # Include Python files and necessary assets
             (pkgs.lib.hasSuffix ".py" name) ||
-            (type == "directory" && name == "scrapers") ||
+            (type == "directory" && name == "vendors") ||
+            (type == "directory" && name == "cart") ||
             (name == "pyproject.toml");
         };
 

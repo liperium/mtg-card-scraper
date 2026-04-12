@@ -127,7 +127,15 @@ class MagiCarteVendor(BaseVendor):
             for card in cards:
                 card_key = card.name.lower()
                 if card_key in found_cards:
-                    prices.append(found_cards[card_key])
+                    p = found_cards[card_key]
+                    prices.append(CardPrice(
+                        card_name=p.card_name,
+                        original_query=card.name,
+                        price=p.price,
+                        website=p.website,
+                        found=True,
+                        quantity_available=p.quantity_available,
+                    ))
                 else:
                     # Check partial matches
                     found = False

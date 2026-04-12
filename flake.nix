@@ -1,5 +1,5 @@
 {
-  description = "MTG Card Scraper - Streamlit app for scraping card prices";
+  description = "MTG Card Scraper - FastAPI backend + SvelteKit frontend";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -20,7 +20,7 @@
 
             port = lib.mkOption {
               type = lib.types.port;
-              default = 8501;
+              default = 8000;
               description = "Port to listen on";
             };
 
@@ -45,13 +45,13 @@
 
           config = lib.mkIf cfg.enable {
             systemd.services.mtg-scraper = {
-              description = "MTG Card Price Scraper";
+              description = "MTG Card Price Scraper API";
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
 
               serviceConfig = {
                 Type = "simple";
-                ExecStart = "${pkg}/bin/mtg-scraper --server.port ${toString cfg.port} --server.address ${cfg.address}";
+                ExecStart = "${pkg}/bin/mtg-scraper --host ${cfg.address} --port ${toString cfg.port}";
                 Restart = "on-failure";
                 RestartSec = 5;
 
@@ -60,11 +60,12 @@
                 StateDirectory = "mtg-scraper";
                 WorkingDirectory = cfg.dataDir;
 
-                # Chromium needs these
+                # Chromium needs these; MTG_FRONTEND_DIST tells FastAPI where static files are
                 Environment = [
                   "HOME=/var/lib/mtg-scraper"
                   "XDG_CONFIG_HOME=/var/lib/mtg-scraper/.config"
                   "XDG_CACHE_HOME=/var/lib/mtg-scraper/.cache"
+                  "MTG_FRONTEND_DIST=${self.packages.${pkgs.system}.frontend}"
                 ];
 
                 # Hardening
@@ -92,16 +93,18 @@
               let
                 name = baseNameOf path;
               in
-              # Include Python files and necessary assets
               (pkgs.lib.hasSuffix ".py" name) ||
               (type == "directory" && name == "vendors") ||
               (type == "directory" && name == "cart") ||
+              (type == "directory" && name == "api") ||
               (name == "pyproject.toml");
           };
 
           # Python environment with all dependencies
           pythonEnv = pkgs.python313.withPackages (ps: with ps; [
-            streamlit
+            fastapi
+            uvicorn
+            sse-starlette
             pandas
             selenium
             pyperclip
@@ -109,69 +112,66 @@
             undetected-chromedriver
           ]);
 
-          # Script to run the app with native Python (development)
+          # Script to run the API backend (development — uses live source)
           runScript = pkgs.writeShellScriptBin "mtg-scraper" ''
             cd ${./.}
             export PYTHONPATH="${./.}:$PYTHONPATH"
-            export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
             export CHROME_BIN="${pkgs.chromium}/bin/chromium"
             export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
-            ${pythonEnv}/bin/streamlit run app.py "$@"
+            ${pythonEnv}/bin/uvicorn api.main:app --host "''${HOST:-127.0.0.1}" --port "''${PORT:-8000}" "$@"
           '';
 
-          # Script to run the app with native Python (release/service)
+          # Script to run the API backend (release/service)
           runScriptRelease = pkgs.writeShellScriptBin "mtg-scraper" ''
             export PYTHONPATH="${src}:$PYTHONPATH"
-            export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
             export CHROME_BIN="${pkgs.chromium}/bin/chromium"
             export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
-            ${pythonEnv}/bin/streamlit run ${src}/app.py \
-              --server.headless true \
-              --server.fileWatcherType none \
-              --client.showErrorDetails false \
-              --browser.gatherUsageStats false \
-              "$@"
-          '';
-
-          # Script to run the app with uv
-          uvRunScript = pkgs.writeShellScriptBin "mtg-scraper-uv" ''
-            cd ${./.}
-            ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
+            ${pythonEnv}/bin/uvicorn api.main:app "$@"
           '';
 
         in
         {
           packages = {
-            # Default: Use uv (matches your current setup)
-            default = pkgs.writeShellScriptBin "mtg-scraper" ''
-              cd ${./.}
-              ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
-            '';
+            # Default: native Python backend (dev)
+            default = runScript;
 
-            # Alternative: Native Python with modules (dev)
-            native = runScript;
-
-            # Native Python release mode (service-friendly)
+            # Release mode (service-friendly, uses nix store src)
             nativeRelease = runScriptRelease;
 
-            # Explicit uv version
-            uv = uvRunScript;
+            # Frontend static build
+            # NOTE: run `npm install` in frontend/ first to generate package-lock.json,
+            # then add the npmDepsHash from `prefetch-npm-deps frontend/package-lock.json`
+            # frontend = pkgs.buildNpmPackage {
+            #   pname = "mtg-scraper-frontend";
+            #   version = "0.1.0";
+            #   src = ./frontend;
+            #   npmDepsHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            #   buildPhase = "npm run build";
+            #   installPhase = "cp -r build $out";
+            # };
+            frontend = pkgs.runCommand "mtg-scraper-frontend-placeholder" {} ''
+              mkdir -p $out
+              echo "Run npm install && npm run build in frontend/ first" > $out/README
+            '';
           };
 
-
-          # Development shell (NixOS native - no uv)
+          # Development shell
           devShells.default = pkgs.mkShell {
             buildInputs = [
               pythonEnv
               pkgs.chromium
               pkgs.chromedriver
+              pkgs.nodejs_22
+              pkgs.bun
             ];
 
             shellHook = ''
               export CHROME_BIN=${pkgs.chromium}/bin/chromium
               export CHROMEDRIVER_PATH=${pkgs.chromedriver}/bin/chromedriver
               echo "MTG Card Scraper development environment"
-              echo "Run: streamlit run app.py"
+              echo ""
+              echo "Backend:  uvicorn api.main:app --reload"
+              echo "Frontend: cd frontend && bun install && bun run dev"
             '';
           };
 
@@ -182,19 +182,9 @@
               program = "${self.packages.${system}.default}/bin/mtg-scraper";
             };
 
-            native = {
-              type = "app";
-              program = "${self.packages.${system}.native}/bin/mtg-scraper";
-            };
-
             nativeRelease = {
               type = "app";
               program = "${self.packages.${system}.nativeRelease}/bin/mtg-scraper";
-            };
-
-            uv = {
-              type = "app";
-              program = "${self.packages.${system}.uv}/bin/mtg-scraper-uv";
             };
           };
         }

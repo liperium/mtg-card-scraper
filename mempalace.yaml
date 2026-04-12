@@ -1,0 +1,15 @@
+wing: mtg_card_scraper
+rooms:
+- name: cart
+  description: Files from cart/
+  keywords:
+  - cart
+  - cart
+- name: vendors
+  description: Files from vendors/
+  keywords:
+  - vendors
+  - vendors
+- name: general
+  description: Files that don't fit other rooms
+  keywords: []

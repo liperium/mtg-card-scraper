@@ -667,12 +667,26 @@ class ScraperManager:
             if card.name not in best_prices
         ]
 
+        # Warn when a card is only available at a shipping vendor
+        warnings = []
+        for vendor in summary:
+            shipping = (vendor_shipping_costs or {}).get(vendor, 0.0)
+            if shipping > 0:
+                cards_at_vendor = buy_lists.get(vendor, [])
+                card_total = sum(i["price_per_unit"] * i["quantity"] for i in cards_at_vendor)
+                if card_total < shipping:
+                    card_names = ", ".join(i["card"] for i in cards_at_vendor)
+                    warnings.append(
+                        f"{card_names} only found at {vendor} (${shipping:.0f} shipping on ${card_total:.2f} of cards)"
+                    )
+
         return {
             "best_prices": best_prices,
             "buy_lists": buy_lists,
             "summary": summary,
             "not_found": not_found,
-            "all_prices": all_prices
+            "all_prices": all_prices,
+            "warnings": warnings,
         }
 
     def _select_vendor_with_preference(

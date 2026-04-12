@@ -1,0 +1,2 @@
+# uv configuration for NixOS
+# UV_PYTHON is set via nix develop shellHook to use the Nix-managed Python

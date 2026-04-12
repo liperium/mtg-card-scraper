@@ -80,126 +80,125 @@
           };
         };
     in
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = nixpkgs.legacyPackages.${system};
+    flake-utils.lib.eachDefaultSystem
+      (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
 
-        # Copy source files to nix store (filtered)
-        src = pkgs.lib.cleanSourceWith {
-          src = ./.;
-          filter = path: type:
-            let
-              name = baseNameOf path;
-            in
-            # Include Python files and necessary assets
-            (pkgs.lib.hasSuffix ".py" name) ||
-            (type == "directory" && name == "vendors") ||
-            (type == "directory" && name == "cart") ||
-            (name == "pyproject.toml");
-        };
+          # Copy source files to nix store (filtered)
+          src = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            filter = path: type:
+              let
+                name = baseNameOf path;
+              in
+              # Include Python files and necessary assets
+              (pkgs.lib.hasSuffix ".py" name) ||
+              (type == "directory" && name == "vendors") ||
+              (type == "directory" && name == "cart") ||
+              (name == "pyproject.toml");
+          };
 
-        # Python environment with all dependencies
-        pythonEnv = pkgs.python313.withPackages (ps: with ps; [
-          streamlit
-          pandas
-          selenium
-          pyperclip
-          setuptools
-          undetected-chromedriver
-        ]);
+          # Python environment with all dependencies
+          pythonEnv = pkgs.python313.withPackages (ps: with ps; [
+            streamlit
+            pandas
+            selenium
+            pyperclip
+            setuptools
+            undetected-chromedriver
+          ]);
 
-        # Script to run the app with native Python (development)
-        runScript = pkgs.writeShellScriptBin "mtg-scraper" ''
-          cd ${./.}
-          export PYTHONPATH="${./.}:$PYTHONPATH"
-          export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
-          export CHROME_BIN="${pkgs.chromium}/bin/chromium"
-          export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
-          ${pythonEnv}/bin/streamlit run app.py "$@"
-        '';
+          # Script to run the app with native Python (development)
+          runScript = pkgs.writeShellScriptBin "mtg-scraper" ''
+            cd ${./.}
+            export PYTHONPATH="${./.}:$PYTHONPATH"
+            export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
+            export CHROME_BIN="${pkgs.chromium}/bin/chromium"
+            export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
+            ${pythonEnv}/bin/streamlit run app.py "$@"
+          '';
 
-        # Script to run the app with native Python (release/service)
-        runScriptRelease = pkgs.writeShellScriptBin "mtg-scraper" ''
-          export PYTHONPATH="${src}:$PYTHONPATH"
-          export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
-          export CHROME_BIN="${pkgs.chromium}/bin/chromium"
-          export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
-          ${pythonEnv}/bin/streamlit run ${src}/app.py \
-            --server.headless true \
-            --server.fileWatcherType none \
-            --client.showErrorDetails false \
-            --browser.gatherUsageStats false \
-            "$@"
-        '';
+          # Script to run the app with native Python (release/service)
+          runScriptRelease = pkgs.writeShellScriptBin "mtg-scraper" ''
+            export PYTHONPATH="${src}:$PYTHONPATH"
+            export PATH="${pkgs.chromium}/bin:${pkgs.chromedriver}/bin:$PATH"
+            export CHROME_BIN="${pkgs.chromium}/bin/chromium"
+            export CHROMEDRIVER_PATH="${pkgs.chromedriver}/bin/chromedriver"
+            ${pythonEnv}/bin/streamlit run ${src}/app.py \
+              --server.headless true \
+              --server.fileWatcherType none \
+              --client.showErrorDetails false \
+              --browser.gatherUsageStats false \
+              "$@"
+          '';
 
-        # Script to run the app with uv
-        uvRunScript = pkgs.writeShellScriptBin "mtg-scraper-uv" ''
-          cd ${./.}
-          ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
-        '';
-
-      in
-      {
-        packages = {
-          # Default: Use uv (matches your current setup)
-          default = pkgs.writeShellScriptBin "mtg-scraper" ''
+          # Script to run the app with uv
+          uvRunScript = pkgs.writeShellScriptBin "mtg-scraper-uv" ''
             cd ${./.}
             ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
           '';
 
-          # Alternative: Native Python with modules (dev)
-          native = runScript;
+        in
+        {
+          packages = {
+            # Default: Use uv (matches your current setup)
+            default = pkgs.writeShellScriptBin "mtg-scraper" ''
+              cd ${./.}
+              ${pkgs.uv}/bin/uv run streamlit run app.py "$@"
+            '';
 
-          # Native Python release mode (service-friendly)
-          nativeRelease = runScriptRelease;
+            # Alternative: Native Python with modules (dev)
+            native = runScript;
 
-          # Explicit uv version
-          uv = uvRunScript;
-        };
+            # Native Python release mode (service-friendly)
+            nativeRelease = runScriptRelease;
 
-
-        # Development shell with all tools
-        devShells.default = pkgs.mkShell {
-          buildInputs = [
-            pythonEnv
-            pkgs.uv
-            pkgs.chromium # For selenium
-          ];
-
-          shellHook = ''
-            echo "MTG Card Scraper development environment"
-            echo "Run 'streamlit run app.py' to start the app"
-            echo "Or use 'uv run streamlit run app.py'"
-
-            # Set Chrome/Chromium path for Selenium
-            export CHROME_BIN="${pkgs.chromium}/bin/chromium"
-          '';
-        };
-
-        # Apps for easy running
-        apps = {
-          default = {
-            type = "app";
-            program = "${self.packages.${system}.default}/bin/mtg-scraper";
+            # Explicit uv version
+            uv = uvRunScript;
           };
 
-          native = {
-            type = "app";
-            program = "${self.packages.${system}.native}/bin/mtg-scraper";
+
+          # Development shell (NixOS native - no uv)
+          devShells.default = pkgs.mkShell {
+            buildInputs = [
+              pythonEnv
+              pkgs.chromium
+              pkgs.chromedriver
+            ];
+
+            shellHook = ''
+              export CHROME_BIN=${pkgs.chromium}/bin/chromium
+              export CHROMEDRIVER_PATH=${pkgs.chromedriver}/bin/chromedriver
+              echo "MTG Card Scraper development environment"
+              echo "Run: streamlit run app.py"
+            '';
           };
 
-          nativeRelease = {
-            type = "app";
-            program = "${self.packages.${system}.nativeRelease}/bin/mtg-scraper";
-          };
+          # Apps for easy running
+          apps = {
+            default = {
+              type = "app";
+              program = "${self.packages.${system}.default}/bin/mtg-scraper";
+            };
 
-          uv = {
-            type = "app";
-            program = "${self.packages.${system}.uv}/bin/mtg-scraper-uv";
+            native = {
+              type = "app";
+              program = "${self.packages.${system}.native}/bin/mtg-scraper";
+            };
+
+            nativeRelease = {
+              type = "app";
+              program = "${self.packages.${system}.nativeRelease}/bin/mtg-scraper";
+            };
+
+            uv = {
+              type = "app";
+              program = "${self.packages.${system}.uv}/bin/mtg-scraper-uv";
+            };
           };
-        };
-      }
-    ) // {
+        }
+      ) // {
       # Export NixOS module
       nixosModules.default = nixosModule;
       nixosModules.mtg-scraper = nixosModule;

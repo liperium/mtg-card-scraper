@@ -29,22 +29,22 @@ class ScraperManager:
             options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
+        #options.add_argument("--disable-gpu")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-software-rasterizer")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        options.add_experimental_option('excludeSwitches', ['enable-logging'])
+        #options.add_experimental_option('excludeSwitches', ['enable-logging'])
 
         # Use Nix-provided chromedriver if available (for NixOS compatibility)
         chromedriver_path = os.environ.get('CHROMEDRIVER_PATH')
         chrome_bin = os.environ.get('CHROME_BIN')
 
-        if chrome_bin:
+        if chrome_bin and os.path.isfile(chrome_bin):
             options.binary_location = chrome_bin
 
-        if chromedriver_path:
+        if chromedriver_path and os.path.isfile(chromedriver_path):
             service = Service(executable_path=chromedriver_path)
             driver = webdriver.Chrome(service=service, options=options)
         else:

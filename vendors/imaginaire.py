@@ -38,33 +38,46 @@ class ImaginaireVendor(BaseVendor):
     def fulfillment_label(self) -> str:
         return "Shipping +$10"
 
-    def _find_chrome_binary(self) -> str:
-        """Locate Chrome executable, including Selenium Manager's cached Chrome for Testing."""
-        import shutil, os, glob
+    def _find_chrome_binary(self) -> str | None:
+        """Locate Chrome/Chromium binary reliably on NixOS, Linux, Windows."""
+        import os
+        import shutil
+        from pathlib import Path
 
-        # System-installed Chrome
-        for name in ("chrome", "chromium", "google-chrome", "chromium-browser"):
+        # 1) Explicit env var from flake shellHook (BEST on NixOS)
+        env_path = os.environ.get("CHROMIUM_BIN")
+        if env_path and Path(env_path).is_file():
+            return env_path
+
+        # 2) PATH lookup (Linux/macOS/Windows)
+        for name in (
+            "chromium",
+            "chromium-browser",
+            "google-chrome",
+            "chrome",
+        ):
             path = shutil.which(name)
-            if path:
-                return str(path)
+            if path and Path(path).is_file():
+                return path
 
-        # Common Windows install paths
-        for candidate in [
+        # 3) Common Linux paths
+        linux_candidates = [
+            "/run/current-system/sw/bin/chromium",
+            "/run/current-system/sw/bin/google-chrome",
+        ]
+        for candidate in linux_candidates:
+            if Path(candidate).is_file():
+                return candidate
+
+        # 4) Windows fallback
+        windows_candidates = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
             os.path.expanduser(r"~\AppData\Local\Google\Chrome\Application\chrome.exe"),
-        ]:
-            if os.path.exists(candidate):
+        ]
+        for candidate in windows_candidates:
+            if Path(candidate).is_file():
                 return candidate
-
-        # Selenium Manager cache: ~/.cache/selenium/chrome/**/chrome.exe
-        selenium_cache = os.path.expanduser(r"~\.cache\selenium\chrome")
-        if os.path.exists(selenium_cache):
-            matches = glob.glob(
-                os.path.join(selenium_cache, "**", "chrome.exe"), recursive=True
-            )
-            if matches:
-                return str(sorted(matches)[-1])  # pick latest version
 
         return None
 

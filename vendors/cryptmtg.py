@@ -23,6 +23,14 @@ class CryptMTGVendor(BaseVendor):
     def supports_bulk_add(self) -> bool:
         return True
 
+    @property
+    def supports_set_info(self) -> bool:
+        return True
+
+    @property
+    def supports_foil(self) -> bool:
+        return True
+
     def scrape(self, cards: List[Card]) -> List[CardPrice]:
         """Scrape prices from CryptMTG"""
         prices = []
@@ -47,26 +55,43 @@ class CryptMTGVendor(BaseVendor):
                     )
                 )
                 self.log(f"Textarea found, entering {len(cards)} cards...")
-                textarea.clear()
-                time.sleep(0.5)
-                textarea.send_keys(card_text)
+                # Set value via JS + fire React synthetic events so the controlled
+                # input updates its state before we click submit.
+                self.driver.execute_script("""
+                    var ta = arguments[0];
+                    var setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLTextAreaElement.prototype, 'value'
+                    ).set;
+                    setter.call(ta, arguments[1]);
+                    ta.dispatchEvent(new Event('input',  { bubbles: true }));
+                    ta.dispatchEvent(new Event('change', { bubbles: true }));
+                """, textarea, card_text)
                 time.sleep(1)
             except Exception as textarea_error:
                 self.log(f"Error finding/filling textarea: {textarea_error}")
                 raise
 
-            # Submit decklist using safe click
+            # Submit — prefer normal click (triggers React synthetic events);
+            # fall back to JS click, then Enter key.
             self.log("Submitting decklist...")
             submit_success = wait_and_click(
                 self.driver,
                 'button[aria-label="submit decklist"]',
-                use_js=True,  # Use JS click to avoid interception
+                use_js=False,
                 timeout=15
             )
 
             if not submit_success:
-                self.log("Warning: Could not click submit button, trying Enter key...")
-                # Try alternative: press Enter on textarea
+                self.log("JS click fallback...")
+                submit_success = wait_and_click(
+                    self.driver,
+                    'button[aria-label="submit decklist"]',
+                    use_js=True,
+                    timeout=5
+                )
+
+            if not submit_success:
+                self.log("Enter key fallback...")
                 from selenium.webdriver.common.keys import Keys
                 textarea.send_keys(Keys.RETURN)
 
@@ -86,89 +111,105 @@ class CryptMTGVendor(BaseVendor):
         return prices
 
     def _extract_prices(self, cards: List[Card]) -> List[CardPrice]:
-        """Extract prices from CryptMTG results page"""
+        """Extract all variant printings from CryptMTG results.
+
+        For each card result, clicks the variant switcher to reveal all
+        available printings, then reads every div.variant-switch-add-option.
+        """
         prices = []
 
         try:
-            # Wait for results container
-            WebDriverWait(self.driver, 10).until(
+            WebDriverWait(self.driver, 25).until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, 'div[data-testid="addedList-list"]')
                 )
             )
 
-            # Get all card items
-            card_items = self.driver.find_elements(
-                By.CSS_SELECTOR, "div.addedList-item"
+            found_cards: dict[str, list[CardPrice]] = {}
+
+            wrappers = self.driver.find_elements(
+                By.CSS_SELECTOR, "div.result-found-wrapper"
             )
 
-            # Create a mapping of found cards
-            found_cards = {}
-
-            for item in card_items:
+            for wrapper in wrappers:
                 try:
-                    title_elem = item.find_element(By.CSS_SELECTOR, "p.item-title")
-                    price_elem = item.find_element(By.CSS_SELECTOR, "p.item-price")
-                    quantity_elem = item.find_element(
-                        By.CSS_SELECTOR, "div.item-quantity"
+                    card_name_elem = wrapper.find_element(
+                        By.CSS_SELECTOR, ".result-card-title"
+                    )
+                    card_name = card_name_elem.text.strip()
+                    if not card_name:
+                        continue
+
+                    try:
+                        switch_btn = wrapper.find_element(
+                            By.CSS_SELECTOR, '[data-testid="open-switch-variant-list"]'
+                        )
+                        self.driver.execute_script("arguments[0].click();", switch_btn)
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
+
+                    variant_elems = self.driver.find_elements(
+                        By.CSS_SELECTOR, "div.variant-switch-add-option"
                     )
 
-                    # Extract card name from title (remove set and condition info)
-                    full_title = title_elem.get_attribute("title") or title_elem.text
-                    card_name = self._extract_card_name_from_title(full_title)
+                    for variant in variant_elems:
+                        try:
+                            paras = variant.find_elements(By.TAG_NAME, "p")
+                            if len(paras) < 3:
+                                continue
+                            full_title = paras[0].get_attribute("title") or paras[0].text
+                            qty_text   = paras[1].get_attribute("title") or paras[1].text
+                            price_text = paras[2].get_attribute("title") or paras[2].text
 
-                    # Extract price (remove currency)
-                    price_text = price_elem.get_attribute("title") or price_elem.text
-                    price = self._parse_price(price_text)
+                            set_code, collector_number, foil = self._parse_title_set_info(full_title)
+                            price = self._parse_price(price_text)
+                            qty_match = re.search(r"(\d+)", qty_text)
+                            available = int(qty_match.group(1)) if qty_match else 0
 
-                    # Extract available quantity
-                    quantity_title = quantity_elem.get_attribute("title") or ""
-                    available = self._parse_quantity(quantity_title)
-
-                    found_cards[card_name.lower()] = CardPrice(
-                        card_name=card_name,
-                        original_query=card_name,
-                        price=price,
-                        website=self.name,
-                        found=True,
-                        quantity_available=available,
-                    )
+                            if available > 0:
+                                found_cards.setdefault(card_name.lower(), []).append(
+                                    CardPrice(
+                                        card_name=card_name,
+                                        original_query=card_name,
+                                        price=price,
+                                        website=self.name,
+                                        found=True,
+                                        quantity_available=available,
+                                        set_code=set_code,
+                                        collector_number=collector_number,
+                                        foil=foil,
+                                    )
+                                )
+                        except Exception as e:
+                            self.log(f"Error parsing variant: {e}")
 
                 except Exception as e:
-                    self.log(f"Error parsing card item: {e}")
+                    self.log(f"Error parsing wrapper: {e}")
 
-            # Match found cards with requested cards
             for card in cards:
                 card_key = card.name.lower()
-                if card_key in found_cards:
-                    p = found_cards[card_key]
-                    prices.append(CardPrice(
-                        card_name=p.card_name,
-                        original_query=card.name,
-                        price=p.price,
-                        website=p.website,
-                        found=True,
-                        quantity_available=p.quantity_available,
-                    ))
-                else:
-                    # Check partial matches
-                    found = False
-                    for key, price_info in found_cards.items():
+                matched = found_cards.get(card_key)
+                if not matched:
+                    for key, card_prices in found_cards.items():
                         if card_key in key or key in card_key:
-                            price_copy = CardPrice(
-                                card_name=price_info.card_name,
-                                original_query=card.name,
-                                price=price_info.price,
-                                website=price_info.website,
-                                found=True,
-                                quantity_available=price_info.quantity_available,
-                            )
-                            prices.append(price_copy)
-                            found = True
+                            matched = card_prices
                             break
-
-                    if not found:
-                        prices.append(self._create_not_found_price(card))
+                if matched:
+                    for p in matched:
+                        prices.append(CardPrice(
+                            card_name=p.card_name,
+                            original_query=card.name,
+                            price=p.price,
+                            website=p.website,
+                            found=True,
+                            quantity_available=p.quantity_available,
+                            set_code=p.set_code,
+                            collector_number=p.collector_number,
+                            foil=p.foil,
+                        ))
+                else:
+                    prices.append(self._create_not_found_price(card))
 
         except Exception as e:
             self.log(f"Error extracting prices: {e}")

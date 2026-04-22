@@ -63,7 +63,10 @@ class CartHandler:
                 card_name=item["card"],
                 quantity=item["quantity"],
                 price_per_unit=item["price_per_unit"],
-                total_price=item["total_price"]
+                total_price=item["total_price"],
+                set_code=item.get("set_code"),
+                collector_number=item.get("collector_number"),
+                foil=item.get("foil", False),
             )
             for item in buy_list
         ]

@@ -1,3 +1,4 @@
+# DO NOT USE THIS FILE OLD STREAMLIT APP
 import streamlit as st
 import pandas as pd
 import re
@@ -5,6 +6,7 @@ from scraper_manager import ScraperManager
 from scraper_config import create_custom_config
 from vendors import CryptMTGVendor, MagiCarteVendor, FaceToFaceGamesVendor, ImaginaireVendor, MythicStoreVendor, GodsArenaVendor
 from cart import CartHandler
+from scryfall import get_image_url
 import time
 
 # Page configuration
@@ -39,6 +41,8 @@ if "parsed_cards" not in st.session_state:
     st.session_state.parsed_cards = None
 if "vendor_status" not in st.session_state:
     st.session_state.vendor_status = {}
+if "printing_overrides" not in st.session_state:
+    st.session_state.printing_overrides = {}
 
 
 def reset_app():
@@ -49,6 +53,7 @@ def reset_app():
     st.session_state.raw_vendor_results = None
     st.session_state.parsed_cards = None
     st.session_state.vendor_status = {}
+    st.session_state.printing_overrides = {}
 
 
 def format_results_to_dataframe(results):
@@ -101,17 +106,31 @@ st.markdown(
     "Compare prices from **MagiCarte**, **CryptMTG**, **Imaginaire**, **Mythic Store**, **Arène des Dieux**, and **Face to Face Games** to find the best deals!"
 )
 
+def vendor_feature_icons(vendor_name: str) -> str:
+    """Return capability icons for a vendor based on its declared properties."""
+    v = CartHandler.VENDORS.get(vendor_name)
+    if v is None:
+        return ""
+    parts = []
+    if v.supports_set_info:
+        parts.append("🃏")
+    if v.supports_foil:
+        parts.append("✨")
+    return " ".join(parts)
+
+
 # Sidebar for configuration
 st.sidebar.header("⚙️ Configuration")
 
 # Scraper selection
 st.sidebar.subheader("Enabled Scrapers")
-use_magicarte = st.sidebar.checkbox("MagiCarte", value=True)
-use_cryptmtg = st.sidebar.checkbox("CryptMTG", value=True)
-use_imaginaire = st.sidebar.checkbox("Imaginaire", value=True)
-use_mythic = st.sidebar.checkbox("Mythic Store", value=True)
-use_godsarena = st.sidebar.checkbox("Arène des Dieux", value=True)
-use_f2f = st.sidebar.checkbox("Face to Face Games", value=True)
+use_magicarte = st.sidebar.checkbox(f"MagiCarte {vendor_feature_icons('MagiCarte')}", value=True)
+use_cryptmtg = st.sidebar.checkbox(f"CryptMTG {vendor_feature_icons('CryptMTG')}", value=True)
+use_imaginaire = st.sidebar.checkbox(f"Imaginaire {vendor_feature_icons('Imaginaire')}", value=True)
+use_mythic = st.sidebar.checkbox(f"Mythic Store {vendor_feature_icons('Mythic Store')}", value=True)
+use_godsarena = st.sidebar.checkbox(f"Arène des Dieux {vendor_feature_icons('Arène des Dieux')}", value=True)
+use_f2f = st.sidebar.checkbox(f"Face to Face Games {vendor_feature_icons('Face to Face Games')}", value=True)
+st.sidebar.caption("🃏 set/CN  ✨ foil")
 
 # Create two columns for input and reset button
 col1, col2 = st.columns([5, 1])
@@ -144,10 +163,10 @@ if card_input.strip():
             continue
         # Pattern with quantity at start
         pattern_with_qty = (
-            r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+            r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+))?(\s+\*F\*)?\s*$"
         )
         # Pattern without quantity (defaults to 1)
-        pattern_no_qty = r"^([A-Za-z].+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+        pattern_no_qty = r"^([A-Za-z].+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+))?(\s+\*F\*)?\s*$"
         if re.match(pattern_with_qty, line.strip()) or re.match(
             pattern_no_qty, line.strip()
         ):
@@ -253,8 +272,9 @@ if st.session_state.raw_vendor_results and st.session_state.parsed_cards:
             cards_found = len([p for p in results if p.found])
             total_cards = len(st.session_state.parsed_cards)
 
+            icons = vendor_feature_icons(vendor_name)
             selected_vendors_dict[vendor_name] = st.checkbox(
-                f"**{vendor_name}**",
+                f"**{vendor_name}**" + (f" {icons}" if icons else ""),
                 value=True,  # All selected by default
                 key=f"vendor_select_{vendor_name}",
             )
@@ -461,54 +481,110 @@ if st.session_state.results and st.session_state.df is not None:
                 help="Shows all prices from all websites for debugging",
             )
 
-    # Buy lists by website
+    # Buy lists by website — card-by-card layout with Scryfall images
     st.markdown("---")
     st.subheader("🛒 Shopping Lists by Website")
 
-    buy_lists = format_buy_lists(st.session_state.results)
-    if buy_lists:
-        tabs = st.tabs(list(buy_lists.keys()))
+    card_vendor_prices = st.session_state.results.get("card_vendor_prices", {})
+    cart_handler = CartHandler()
 
-        for idx, (website, df) in enumerate(buy_lists.items()):
-            with tabs[idx]:
-                st.dataframe(df, use_container_width=True, hide_index=True)
+    if st.session_state.results.get("buy_lists"):
+        vendor_names = list(st.session_state.results["buy_lists"].keys())
+        tabs = st.tabs(vendor_names)
 
-                # Calculate and display total
-                site_summary = st.session_state.results["summary"][website]
+        for tab_idx, vendor_name in enumerate(vendor_names):
+            with tabs[tab_idx]:
+                store_buy_list = st.session_state.results["buy_lists"][vendor_name]
+
+                for item_idx, item in enumerate(store_buy_list):
+                    card_name = item["card"]
+                    set_code = item.get("set_code")
+                    collector_number = item.get("collector_number")
+                    foil = item.get("foil", False)
+
+                    # Check for printing override
+                    override_key = f"{card_name}|{vendor_name}"
+                    override = st.session_state.printing_overrides.get(override_key)
+                    if override:
+                        set_code = override.set_code
+                        collector_number = override.collector_number
+                        foil = override.foil
+                        display_price = override.price
+                    else:
+                        display_price = item["price_per_unit"]
+
+                    img_url = get_image_url(card_name, set_code, collector_number)
+
+                    img_col, info_col, action_col = st.columns([1, 4, 1])
+
+                    with img_col:
+                        st.image(img_url, width=80)
+
+                    with info_col:
+                        # Card name + badges
+                        badges = ""
+                        if set_code:
+                            badges += f" `{set_code}"
+                            if collector_number:
+                                badges += f" #{collector_number}"
+                            badges += "`"
+                        if foil:
+                            badges += " **FOIL**"
+
+                        st.markdown(f"**{card_name}**{badges}")
+                        st.caption(
+                            f"{item['quantity']}x @ ${display_price:.2f} = "
+                            f"${display_price * item['quantity']:.2f}"
+                        )
+
+                    with action_col:
+                        # Printing picker
+                        available = card_vendor_prices.get(card_name, {}).get(vendor_name, [])
+                        if len(available) > 1:
+                            with st.popover("🔄", help="Pick a different printing"):
+                                st.markdown(f"**{card_name}** — {len(available)} printings")
+                                for alt_idx, alt in enumerate(
+                                    sorted(available, key=lambda p: p.price)
+                                ):
+                                    alt_label = f"${alt.price:.2f}"
+                                    if alt.set_code:
+                                        alt_label += f" [{alt.set_code}"
+                                        if alt.collector_number:
+                                            alt_label += f" #{alt.collector_number}"
+                                        alt_label += "]"
+                                    if alt.foil:
+                                        alt_label += " FOIL"
+                                    alt_label += f" (qty: {alt.quantity_available})"
+
+                                    if st.button(
+                                        alt_label,
+                                        key=f"pick_{vendor_name}_{card_name}_{alt_idx}",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state.printing_overrides[override_key] = alt
+                                        st.rerun()
+
+                    if item_idx < len(store_buy_list) - 1:
+                        st.divider()
+
+                # Total and cart button
+                site_summary = st.session_state.results["summary"][vendor_name]
                 total = site_summary["total_price"]
                 shipping = site_summary.get("shipping_cost", 0.0)
                 effective = site_summary.get("effective_total", total)
+
+                st.markdown("---")
                 if shipping > 0:
                     st.markdown(f"**Cards: ${total:.2f} + Shipping: ${shipping:.2f} = Total: ${effective:.2f}**")
                 else:
-                    st.markdown(f"**Total for {website}: ${total:.2f}** 📍 Local Pickup")
+                    st.markdown(f"**Total: ${total:.2f}** 📍 Local Pickup")
 
-    # Add to Cart section
-    st.markdown("---")
-    st.subheader("🚀 Add to Cart")
-
-    cart_handler = CartHandler()
-
-    # Check if clipboard is available
-    if not cart_handler.is_clipboard_available():
-        st.warning(
-            "Clipboard functionality not available. "
-            "Install pyperclip: `pip install pyperclip`"
-        )
-
-    store_cols = st.columns(len(st.session_state.results["buy_lists"]))
-
-    for idx, (store_name, store_buy_list) in enumerate(
-        st.session_state.results["buy_lists"].items()
-    ):
-        if store_buy_list:
-            with store_cols[idx]:
                 if st.button(
-                    f"Open {store_name}",
-                    key=f"open_cart_{store_name}",
+                    f"🚀 Open {vendor_name}",
+                    key=f"open_cart_{vendor_name}",
                     use_container_width=True,
                 ):
-                    result = cart_handler.open_store(store_name, store_buy_list)
+                    result = cart_handler.open_store(vendor_name, store_buy_list)
                     if result.success:
                         if result.supports_bulk_add:
                             st.success("Opened! Paste & Add All")

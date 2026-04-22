@@ -82,7 +82,8 @@ class GodsArenaVendor(BaseVendor):
         """Extract prices from Gods Arena results page.
 
         The site returns multiple li.product per card (one per set printing).
-        We collect all in-stock variants, group by card name, and keep the cheapest.
+        Returns all in-stock variants so the optimizer and printing picker can
+        work with the full set.
         """
         prices = []
 
@@ -91,8 +92,10 @@ class GodsArenaVendor(BaseVendor):
                 EC.presence_of_element_located((By.CSS_SELECTOR, "li.product"))
             )
 
-            # Collect cheapest in-stock price per card name
-            best: Dict[str, dict] = {}  # lowercased name → {price, qty, display_name}
+            # Collect all in-stock printings per card name
+            all_printings: Dict[str, list[CardPrice]] = {}
+            # Crystal Commerce HTML duplicates the same variant-row across multiple DOM containers
+            seen_variants: set = set()
 
             in_stock_rows = self.driver.find_elements(
                 By.CSS_SELECTOR, "div.variant-row.in-stock"
@@ -103,57 +106,88 @@ class GodsArenaVendor(BaseVendor):
                     if not forms:
                         continue
                     form = forms[0]
-                    card_name = (form.get_attribute("data-name") or "").strip()
+                    full_name = (form.get_attribute("data-name") or "").strip()
                     price_str = form.get_attribute("data-price") or ""
+
+                    # Skip duplicates (same DOM variant appears multiple times on the page)
+                    dedup_key = (full_name, price_str)
+                    if dedup_key in seen_variants:
+                        continue
+                    seen_variants.add(dedup_key)
+
                     price = self._parse_price(price_str)
 
                     qty_inputs = row.find_elements(By.CSS_SELECTOR, "input.qty")
                     qty = int(qty_inputs[0].get_attribute("max") or 0) if qty_inputs else 0
 
+                    # Extract set/foil from the variant name
+                    # Crystal Commerce data-name often includes set info
+                    card_name = self._extract_card_name(full_name)
+                    set_code, collector_number, foil = self._parse_title_set_info(full_name)
+
                     key = card_name.lower()
-                    if key and (key not in best or price < best[key]["price"]):
-                        best[key] = {"price": price, "qty": qty, "display_name": card_name}
+                    if key:
+                        cp = CardPrice(
+                            card_name=card_name,
+                            original_query=card_name,
+                            price=price,
+                            website=self.name,
+                            found=True,
+                            quantity_available=qty,
+                            set_code=set_code,
+                            collector_number=collector_number,
+                            foil=foil,
+                        )
+                        all_printings.setdefault(key, []).append(cp)
                 except Exception as e:
                     self.log(f"Error parsing variant row: {e}")
 
-            self.log(f"Found {len(best)} unique cards in stock")
+            total_variants = sum(len(v) for v in all_printings.values())
+            self.log(f"Found {len(all_printings)} unique cards ({total_variants} printings) in stock")
 
             # Match queried cards to found results
             for card in cards:
                 card_key = card.name.lower()
-                if card_key in best:
-                    b = best[card_key]
-                    prices.append(CardPrice(
-                        card_name=b["display_name"],
-                        original_query=card.name,
-                        price=b["price"],
-                        website=self.name,
-                        found=True,
-                        quantity_available=b["qty"],
-                    ))
-                else:
-                    # Fallback: partial match
-                    found = False
-                    for key, b in best.items():
+                matched = all_printings.get(card_key)
+
+                if not matched:
+                    for key, card_prices in all_printings.items():
                         if card_key in key or key in card_key:
-                            prices.append(CardPrice(
-                                card_name=b["display_name"],
-                                original_query=card.name,
-                                price=b["price"],
-                                website=self.name,
-                                found=True,
-                                quantity_available=b["qty"],
-                            ))
-                            found = True
+                            matched = card_prices
                             break
-                    if not found:
-                        prices.append(self._create_not_found_price(card))
+
+                if matched:
+                    for p in matched:
+                        prices.append(CardPrice(
+                            card_name=p.card_name,
+                            original_query=card.name,
+                            price=p.price,
+                            website=p.website,
+                            found=True,
+                            quantity_available=p.quantity_available,
+                            set_code=p.set_code,
+                            collector_number=p.collector_number,
+                            foil=p.foil,
+                        ))
+                else:
+                    prices.append(self._create_not_found_price(card))
 
         except Exception as e:
             self.log(f"Error extracting prices: {e}")
             prices.extend(self._create_not_found_prices(cards))
 
         return prices
+
+    def _extract_card_name(self, full_name: str) -> str:
+        """Extract card name from Crystal Commerce data-name, removing condition/set info."""
+        # Remove condition suffixes
+        name = re.sub(
+            r"\s*[-–]\s*(Near Mint|Lightly Played|Moderately Played|Heavily Played|Damaged).*$",
+            "", full_name, flags=re.IGNORECASE
+        )
+        # Remove set info in brackets/parens
+        name = re.sub(r"\s*[\[\(].*?[\]\)]", "", name)
+        return name.strip()
 
     def _parse_price(self, price_text: str) -> float:
         """Parse price from text like 'CAD$ 33.24' → 33.24"""

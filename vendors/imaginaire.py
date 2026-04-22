@@ -83,6 +83,8 @@ class ImaginaireVendor(BaseVendor):
 
     def _create_uc_driver(self):
         """Create an undetected-chromedriver instance to bypass Cloudflare."""
+        import os, subprocess
+
         options = uc.ChromeOptions()
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--no-sandbox")
@@ -99,8 +101,32 @@ class ImaginaireVendor(BaseVendor):
                 "Warning: could not locate Chrome binary, UC will attempt auto-detect"
             )
 
+        # Use the system chromedriver if available via env var (set by flake devShell).
+        # This prevents UC from downloading a version that mismatches the system Chrome.
+        driver_path = os.environ.get("CHROMEDRIVER_PATH") or os.environ.get("CHROMEDRIVER")
+        version_main = None
+        if chrome_path:
+            try:
+                out = subprocess.check_output(
+                    [str(chrome_path), "--version"], text=True, timeout=5
+                )
+                # "Chromium 145.0.7632.159" → 145
+                m = __import__("re").search(r"(\d+)\.", out)
+                if m:
+                    version_main = int(m.group(1))
+            except Exception:
+                pass
+
+        # Pass only the Chrome version — do NOT pass driver_executable_path because
+        # undetected-chromedriver needs to patch the binary, which fails on NixOS's
+        # immutable /nix/store. Let UC download and cache its own copy instead.
+        kwargs = {"options": options, "headless": False}
+        if version_main:
+            kwargs["version_main"] = version_main
+            self.log(f"Chrome major version: {version_main}")
+
         # headless=False is intentional: Cloudflare Turnstile detects headless mode
-        return uc.Chrome(options=options, headless=False)
+        return uc.Chrome(**kwargs)
 
     def scrape(self, cards: List[Card]) -> List[CardPrice]:
         """Scrape prices from Imaginaire using undetected-chromedriver."""
@@ -164,7 +190,11 @@ class ImaginaireVendor(BaseVendor):
         return prices
 
     def _extract_prices(self, cards: List[Card], driver) -> List[CardPrice]:
-        """Extract prices from Imaginaire results page"""
+        """Extract prices from Imaginaire results page.
+
+        Returns all in-stock printings per card. Imaginaire may have limited
+        set info — we capture what's available.
+        """
         prices = []
 
         try:
@@ -173,12 +203,22 @@ class ImaginaireVendor(BaseVendor):
             )
 
             card_items = driver.find_elements(By.CSS_SELECTOR, "li.card-listing")
-            found_cards = {}
+            found_cards: dict[str, list[CardPrice]] = {}
 
             for item in card_items:
                 try:
                     name_elem = item.find_element(By.CSS_SELECTOR, "h3.magictitle")
-                    card_name = name_elem.text.strip()
+                    full_title = name_elem.text.strip()
+                    card_name = full_title
+
+                    # Try to extract set/foil from title or subtitle elements
+                    set_code = None
+                    collector_number = None
+                    foil = False
+                    try:
+                        set_code, collector_number, foil = self._parse_title_set_info(full_title)
+                    except Exception:
+                        pass
 
                     # Cards the site couldn't match have no qty input — skip them
                     qty_inputs = item.find_elements(
@@ -189,54 +229,52 @@ class ImaginaireVendor(BaseVendor):
                         qty_inputs[0].get_attribute("price") or ""
                     )
 
-                    # Available quantity from cardheaderright text e.g. "1/3"
                     header_div = item.find_element(
                         By.CSS_SELECTOR, "div.cardheaderright > div"
                     )
                     avail = self._parse_available(header_div.text)
 
-                    found_cards[card_name.lower()] = CardPrice(
+                    cp = CardPrice(
                         card_name=card_name,
                         original_query=card_name,
                         price=price,
                         website=self.name,
                         found=True,
                         quantity_available=avail,
+                        set_code=set_code,
+                        collector_number=collector_number,
+                        foil=foil,
                     )
+                    found_cards.setdefault(card_name.lower(), []).append(cp)
 
                 except Exception as e:
                     self.log(f"Error parsing card item: {e}")
 
             for card in cards:
                 card_key = card.name.lower()
-                if card_key in found_cards:
-                    p = found_cards[card_key]
-                    prices.append(CardPrice(
-                        card_name=p.card_name,
-                        original_query=card.name,
-                        price=p.price,
-                        website=p.website,
-                        found=True,
-                        quantity_available=p.quantity_available,
-                    ))
-                else:
-                    found = False
-                    for key, price_info in found_cards.items():
+                matched = found_cards.get(card_key)
+
+                if not matched:
+                    for key, card_prices in found_cards.items():
                         if card_key in key or key in card_key:
-                            prices.append(
-                                CardPrice(
-                                    card_name=price_info.card_name,
-                                    original_query=card.name,
-                                    price=price_info.price,
-                                    website=price_info.website,
-                                    found=True,
-                                    quantity_available=price_info.quantity_available,
-                                )
-                            )
-                            found = True
+                            matched = card_prices
                             break
-                    if not found:
-                        prices.append(self._create_not_found_price(card))
+
+                if matched:
+                    for p in matched:
+                        prices.append(CardPrice(
+                            card_name=p.card_name,
+                            original_query=card.name,
+                            price=p.price,
+                            website=p.website,
+                            found=True,
+                            quantity_available=p.quantity_available,
+                            set_code=p.set_code,
+                            collector_number=p.collector_number,
+                            foil=p.foil,
+                        ))
+                else:
+                    prices.append(self._create_not_found_price(card))
 
         except Exception as e:
             self.log(f"Error extracting prices: {e}")

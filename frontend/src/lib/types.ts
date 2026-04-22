@@ -4,6 +4,8 @@ export interface VendorMeta {
 	fulfillment_label: string;
 	supports_bulk_add: boolean;
 	deck_builder_url: string;
+	supports_set_info: boolean;
+	supports_foil: boolean;
 }
 
 export interface Card {
@@ -20,6 +22,9 @@ export interface CardPrice {
 	website: string;
 	found: boolean;
 	quantity_available: number;
+	set_code: string | null;
+	collector_number: string | null;
+	foil: boolean;
 }
 
 export type JobStatus = 'pending' | 'running' | 'complete' | 'error';

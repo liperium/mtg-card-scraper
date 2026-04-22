@@ -145,6 +145,65 @@
 	}
 
 	// -------------------------------------------------------------------------
+	// Printing picker
+	// -------------------------------------------------------------------------
+	let pickerCard: string | null = null;
+	let pickerIdx = 0;
+
+	// All in-stock printings per card, sorted cheapest first
+	$: cardPrintings = (() => {
+		const raw = $jobState?.raw_vendor_results;
+		if (!raw) return {} as Record<string, import('$lib/types').CardPrice[]>;
+		const result: Record<string, import('$lib/types').CardPrice[]> = {};
+		for (const prices of Object.values(raw)) {
+			for (const p of prices) {
+				if (p.found && p.price != null && p.quantity_available > 0) {
+					(result[p.original_query] ??= []).push(p);
+				}
+			}
+		}
+		for (const key of Object.keys(result)) {
+			result[key].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+		}
+		return result;
+	})();
+
+	// Group printings by unique set+CN+foil combination, sorted by cheapest vendor price
+	$: pickerGroups = (() => {
+		if (!pickerCard) return [] as import('$lib/types').CardPrice[][];
+		const all = cardPrintings[pickerCard] ?? [];
+		const map = new Map<string, import('$lib/types').CardPrice[]>();
+		for (const p of all) {
+			const key = `${p.set_code ?? ''}|${p.collector_number ?? ''}|${p.foil}`;
+			const group = map.get(key);
+			if (group) group.push(p);
+			else map.set(key, [p]);
+		}
+		return [...map.values()].sort(
+			(a, b) =>
+				Math.min(...a.map((p) => p.price ?? Infinity)) -
+				Math.min(...b.map((p) => p.price ?? Infinity))
+		);
+	})();
+
+	$: pickerGroup = pickerGroups[pickerIdx] ?? null;
+	$: pickerGroupCheapest = pickerGroups[0]
+		? Math.min(...pickerGroups[0].map((p) => p.price ?? Infinity))
+		: Infinity;
+
+	function scryfallUrl(name: string, setCode: string | null, cn: string | null): string {
+		if (setCode && cn && /^[A-Z0-9]{2,6}$/.test(setCode)) {
+			return `https://api.scryfall.com/cards/${setCode.toLowerCase()}/${cn}?format=image&version=normal`;
+		}
+		return `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(name)}&format=image&version=normal`;
+	}
+
+	function openPicker(card: string) {
+		pickerCard = card;
+		pickerIdx = 0;
+	}
+
+	// -------------------------------------------------------------------------
 	// Debug panel
 	// -------------------------------------------------------------------------
 	let debugOpen = false;
@@ -174,6 +233,13 @@
 	// -------------------------------------------------------------------------
 	// Helpers
 	// -------------------------------------------------------------------------
+	function vendorFeatureIcons(v: import('$lib/types').VendorMeta): string {
+		const parts: string[] = [];
+		if (v.supports_set_info) parts.push('🃏');
+		if (v.supports_foil) parts.push('✨');
+		return parts.join(' ');
+	}
+
 	function vendorStatusIcon(status: string): string {
 		if (status === 'complete') return '✓';
 		if (status === 'error') return '✗';
@@ -190,6 +256,68 @@
 	function fmt(n: number | null | undefined): string {
 		if (n == null) return 'N/A';
 		return `$${n.toFixed(2)}`;
+	}
+
+	// -------------------------------------------------------------------------
+	// Debug mock data
+	// -------------------------------------------------------------------------
+	function loadDebugData() {
+		const mockRaw: Record<string, import('$lib/types').CardPrice[]> = {
+			MagiCarte: [
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 2.30, website: 'MagiCarte', found: true, quantity_available: 4, set_code: 'CMM', collector_number: '396', foil: false },
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 2.70, website: 'MagiCarte', found: true, quantity_available: 2, set_code: 'C11', collector_number: '196', foil: false },
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 4.50, website: 'MagiCarte', found: true, quantity_available: 1, set_code: 'CMM', collector_number: '396', foil: true },
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 1.80, website: 'MagiCarte', found: true, quantity_available: 3, set_code: 'C14', collector_number: '227', foil: false },
+				{ card_name: 'Command Tower', original_query: 'Command Tower', price: 0.50, website: 'MagiCarte', found: true, quantity_available: 8, set_code: 'CMM', collector_number: '349', foil: false },
+				{ card_name: 'Command Tower', original_query: 'Command Tower', price: 0.60, website: 'MagiCarte', found: true, quantity_available: 3, set_code: 'C21', collector_number: '281', foil: false },
+				{ card_name: 'Command Tower', original_query: 'Command Tower', price: 1.80, website: 'MagiCarte', found: true, quantity_available: 1, set_code: 'CLB', collector_number: '333', foil: true },
+			],
+			CryptMTG: [
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 2.20, website: 'CryptMTG', found: true, quantity_available: 6, set_code: 'CMM', collector_number: '396', foil: false },
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 2.60, website: 'CryptMTG', found: true, quantity_available: 1, set_code: 'BLC', collector_number: '128', foil: false },
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 3.90, website: 'CryptMTG', found: true, quantity_available: 2, set_code: 'BLC', collector_number: '128', foil: true },
+				{ card_name: 'Command Tower', original_query: 'Command Tower', price: 0.45, website: 'CryptMTG', found: true, quantity_available: 12, set_code: 'CMM', collector_number: '349', foil: false },
+				{ card_name: 'Command Tower', original_query: 'Command Tower', price: 1.20, website: 'CryptMTG', found: true, quantity_available: 2, set_code: 'CMM', collector_number: '349', foil: true },
+			],
+			'Mythic Store': [
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 3.10, website: 'Mythic Store', found: true, quantity_available: 3, set_code: 'C16', collector_number: '207', foil: false },
+				{ card_name: 'Sol Ring', original_query: 'Sol Ring', price: 1.75, website: 'Mythic Store', found: true, quantity_available: 2, set_code: 'C14', collector_number: '227', foil: false },
+				{ card_name: 'Command Tower', original_query: 'Command Tower', price: 0.55, website: 'Mythic Store', found: true, quantity_available: 5, set_code: 'C11', collector_number: '203', foil: false },
+			],
+		};
+
+		jobState.set({
+			job_id: 'debug',
+			status: 'complete',
+			vendor_progress: { MagiCarte: 'complete', CryptMTG: 'complete', 'Mythic Store': 'complete' },
+			raw_vendor_results: mockRaw,
+			parsed_cards: [
+				{ quantity: 1, name: 'Sol Ring', set_code: null, collector_number: null },
+				{ quantity: 1, name: 'Command Tower', set_code: null, collector_number: null },
+			],
+			error: null,
+		});
+
+		selectedVendors.set(new Set(['MagiCarte', 'CryptMTG', 'Mythic Store']));
+
+		results.set({
+			best_prices: {
+				'Sol Ring': { quantity_needed: 1, best_price: 1.75, website: 'Mythic Store', quantity_available: 2 },
+				'Command Tower': { quantity_needed: 1, best_price: 0.45, website: 'CryptMTG', quantity_available: 12 },
+			},
+			buy_lists: {
+				'Mythic Store': [{ card: 'Sol Ring', quantity: 1, price_per_unit: 1.75, total_price: 1.75 }],
+				CryptMTG: [{ card: 'Command Tower', quantity: 1, price_per_unit: 0.45, total_price: 0.45 }],
+			},
+			summary: {
+				'Mythic Store': { total_cards: 1, total_price: 1.75, shipping_cost: 10.0, effective_total: 11.75 },
+				CryptMTG: { total_cards: 1, total_price: 0.45, shipping_cost: 0, effective_total: 0.45 },
+			},
+			not_found: [],
+			warnings: [],
+		});
+
+		phase.set('results');
 	}
 
 
@@ -236,18 +364,27 @@
 							}}
 						/>
 						{v.name}
+						{#if vendorFeatureIcons(v)}
+							<span class="feature-icons">{vendorFeatureIcons(v)}</span>
+						{/if}
 						<span class="ship-label">{v.fulfillment_label}</span>
 					</label>
 				{/each}
 			</div>
+			<p class="vendor-legend">🃏 set / collector #&nbsp;&nbsp;✨ foil detection</p>
 
-			<button
-				class="btn-primary"
-				on:click={handleScrape}
-				disabled={$phase === 'scraping' || !$cardList.trim() || $enabledVendors.size === 0}
-			>
-				{$phase === 'scraping' ? 'Searching…' : 'Find Best Prices'}
-			</button>
+			<div class="action-row">
+				<button
+					class="btn-primary"
+					on:click={handleScrape}
+					disabled={$phase === 'scraping' || !$cardList.trim() || $enabledVendors.size === 0}
+				>
+					{$phase === 'scraping' ? 'Searching…' : 'Find Best Prices'}
+				</button>
+				<button class="btn-debug" on:click={loadDebugData} disabled={$phase === 'scraping'}>
+					⚙ Debug
+				</button>
+			</div>
 		</section>
 
 		<!-- Live vendor progress -->
@@ -297,6 +434,9 @@
 								}}
 							/>
 							{v.name}
+							{#if vendorFeatureIcons(v)}
+								<span class="feature-icons">{vendorFeatureIcons(v)}</span>
+							{/if}
 						</label>
 					{/each}
 				</div>
@@ -397,7 +537,12 @@
 						<tbody>
 							{#each Object.entries($results.best_prices) as [card, info]}
 								<tr>
-									<td>{card}</td>
+									<td>
+										{card}
+										{#if (cardPrintings[card]?.length ?? 0) > 0}
+											<button class="btn-picker" on:click={() => openPicker(card)}>🔍</button>
+										{/if}
+									</td>
 									<td>{info.quantity_needed}</td>
 									<td>{fmt(info.best_price)}</td>
 									<td>{info.website}</td>
@@ -500,6 +645,62 @@
 						{/if}
 					</section>
 				{/if}
+			</div>
+		</div>
+	{/if}
+	<!-- Printing picker modal -->
+	{#if pickerCard && pickerGroup}
+		{@const rep = pickerGroup[0]}
+		{@const groupMin = Math.min(...pickerGroup.map((p) => p.price ?? Infinity))}
+		{@const diff = groupMin - pickerGroupCheapest}
+		<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+		<div class="modal-backdrop" on:click|self={() => (pickerCard = null)}>
+			<div class="modal">
+				<div class="modal-header">
+					<h2>{pickerCard}</h2>
+					<span class="picker-counter">{pickerIdx + 1} / {pickerGroups.length}</span>
+					<button class="btn-close" on:click={() => (pickerCard = null)}>✕</button>
+				</div>
+				<div class="modal-body">
+					<button
+						class="picker-nav"
+						disabled={pickerIdx === 0}
+						on:click={() => pickerIdx--}
+					>‹</button>
+
+					<div class="picker-card">
+						<img
+							src={scryfallUrl(pickerCard, rep.set_code, rep.collector_number)}
+							alt={pickerCard}
+						/>
+						<div class="picker-meta">
+							{#if rep.set_code}<span class="badge">{rep.set_code}</span>{/if}
+							{#if rep.collector_number}<span class="badge muted">#{rep.collector_number}</span>{/if}
+							{#if rep.foil}<span class="badge foil">✨ Foil</span>{/if}
+							{#if diff === 0}
+								<span class="badge best">★ Best</span>
+							{:else}
+								<span class="badge worse">+{fmt(diff)}</span>
+							{/if}
+						</div>
+						<div class="picker-vendors">
+							{#each pickerGroup as p, i}
+								<div class="vendor-chip">
+									<span class="vendor-num">{i + 1}</span>
+									<span class="vendor-name">{p.website}</span>
+									<span class="vendor-price">{fmt(p.price)}</span>
+									<span class="vendor-qty">({p.quantity_available})</span>
+								</div>
+							{/each}
+						</div>
+					</div>
+
+					<button
+						class="picker-nav"
+						disabled={pickerIdx >= pickerGroups.length - 1}
+						on:click={() => pickerIdx++}
+					>›</button>
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -612,6 +813,17 @@
 		color: var(--text-muted);
 	}
 
+	.feature-icons {
+		font-size: 0.8rem;
+		opacity: 0.75;
+	}
+
+	.vendor-legend {
+		font-size: 0.75rem;
+		color: var(--text-muted);
+		margin-bottom: 0.75rem;
+	}
+
 	.btn-primary {
 		background: var(--accent);
 		color: white;
@@ -629,6 +841,30 @@
 
 	.btn-primary:disabled {
 		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.action-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.btn-debug {
+		background: none;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		color: var(--text-muted);
+		padding: 0.65rem 1rem;
+		font-size: 0.85rem;
+		cursor: pointer;
+	}
+	.btn-debug:hover:not(:disabled) {
+		border-color: var(--accent);
+		color: var(--text);
+	}
+	.btn-debug:disabled {
+		opacity: 0.4;
 		cursor: not-allowed;
 	}
 
@@ -942,4 +1178,164 @@
 	.debug-na {
 		color: var(--border);
 	}
+
+	/* ---- Printing picker ---- */
+	.btn-picker {
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 0 0.25rem;
+		font-size: 0.85rem;
+		opacity: 0.6;
+		vertical-align: middle;
+	}
+	.btn-picker:hover {
+		opacity: 1;
+	}
+
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.65);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 100;
+	}
+
+	.modal {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 1.5rem;
+		width: min(480px, 95vw);
+		max-height: 90vh;
+		overflow-y: auto;
+	}
+
+	.modal-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 1rem;
+		gap: 0.5rem;
+	}
+
+	.modal-header h2 {
+		margin: 0;
+		flex: 1;
+	}
+
+	.picker-counter {
+		color: var(--text-muted);
+		font-size: 0.85rem;
+		white-space: nowrap;
+	}
+
+	.btn-close {
+		background: none;
+		border: none;
+		color: var(--text-muted);
+		font-size: 1.2rem;
+		cursor: pointer;
+		padding: 0.25rem 0.5rem;
+	}
+	.btn-close:hover {
+		color: var(--text);
+	}
+
+	.modal-body {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		justify-content: center;
+	}
+
+	/* ---- Picker carousel ---- */
+	.picker-nav {
+		background: none;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		color: var(--text);
+		font-size: 2rem;
+		line-height: 1;
+		padding: 0.5rem 0.75rem;
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+	.picker-nav:disabled {
+		opacity: 0.2;
+		cursor: default;
+	}
+	.picker-nav:not(:disabled):hover {
+		background: var(--surface2);
+	}
+
+	.picker-card {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.picker-card img {
+		border-radius: 8px;
+		width: 220px;
+		display: block;
+	}
+
+	.picker-meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		justify-content: center;
+	}
+
+	.badge {
+		font-size: 0.75rem;
+		padding: 0.2rem 0.5rem;
+		border-radius: 999px;
+		background: var(--surface2);
+		border: 1px solid var(--border);
+	}
+	.badge.muted { color: var(--text-muted); }
+	.badge.foil { background: rgba(255, 215, 0, 0.15); border-color: gold; }
+	.badge.best { background: rgba(80, 200, 120, 0.2); border-color: #50c878; color: #50c878; font-weight: 600; }
+	.badge.worse { color: var(--text-muted); }
+
+	.picker-vendors {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		width: 100%;
+	}
+
+	.vendor-chip {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		background: var(--surface2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 0.35rem 0.6rem;
+		font-size: 0.85rem;
+	}
+
+	.vendor-num {
+		background: var(--accent);
+		color: #000;
+		border-radius: 50%;
+		width: 1.4em;
+		height: 1.4em;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 0.75rem;
+		font-weight: 700;
+		flex-shrink: 0;
+	}
+
+	.vendor-name { flex: 1; }
+	.vendor-price { font-weight: 600; }
+	.vendor-qty { color: var(--text-muted); font-size: 0.8rem; }
 </style>

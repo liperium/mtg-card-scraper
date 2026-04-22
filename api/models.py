@@ -49,6 +49,8 @@ class VendorMeta(BaseModel):
     fulfillment_label: str
     supports_bulk_add: bool
     deck_builder_url: str
+    supports_set_info: bool = False
+    supports_foil: bool = False
 
 
 class CardModel(BaseModel):
@@ -65,6 +67,9 @@ class CardPriceModel(BaseModel):
     website: str
     found: bool
     quantity_available: int = 0
+    set_code: Optional[str] = None
+    collector_number: Optional[str] = None
+    foil: bool = False
 
 
 class JobStatus(str, Enum):

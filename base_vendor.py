@@ -1,6 +1,7 @@
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from selenium import webdriver
 
 
@@ -12,6 +13,7 @@ class Card:
     name: str
     set_code: Optional[str] = None
     collector_number: Optional[str] = None
+    foil: bool = False
 
 
 @dataclass
@@ -24,6 +26,9 @@ class CardPrice:
     website: str
     found: bool
     quantity_available: int = 0
+    set_code: Optional[str] = None
+    collector_number: Optional[str] = None
+    foil: bool = False
 
 
 @dataclass
@@ -34,6 +39,9 @@ class CartItem:
     quantity: int
     price_per_unit: float
     total_price: float
+    set_code: Optional[str] = None
+    collector_number: Optional[str] = None
+    foil: bool = False
 
 
 class BaseVendor(ABC):
@@ -118,6 +126,16 @@ class BaseVendor(ABC):
         """Human-readable fulfillment method shown in the UI."""
         return "Local Pickup"
 
+    @property
+    def supports_set_info(self) -> bool:
+        """True if this vendor's scraper returns set name / collector number."""
+        return False
+
+    @property
+    def supports_foil(self) -> bool:
+        """True if this vendor's scraper detects foil variants."""
+        return False
+
     def is_enabled(self) -> bool:
         """
         Check if this vendor should be used.
@@ -138,6 +156,33 @@ class BaseVendor(ABC):
         """
         return 100
 
+    def _parse_title_set_info(self, title: str) -> Tuple[Optional[str], Optional[str], bool]:
+        """
+        Extract (set_code, collector_number, foil) from a product title.
+
+        Handles two formats:
+          - "[ABC - 123] Near Mint Foil"  → set_code="ABC", collector_number="123"
+          - "[Full Set Name] Near Mint"   → set_code="Full Set Name", collector_number=None
+
+        Returns (set_code_or_name, collector_number, foil).
+        """
+        set_code = None
+        collector_number = None
+        foil = bool(re.search(r'\bfoil\b', title, re.IGNORECASE))
+
+        # Prefer precise "CODE - number" format
+        match = re.search(r'\[([A-Z0-9]+)\s*[-–]\s*(\S+)\]', title)
+        if match:
+            set_code = match.group(1)
+            collector_number = match.group(2)
+        else:
+            # Fall back to full set name inside brackets
+            match = re.search(r'\[([^\]]+)\]', title)
+            if match:
+                set_code = match.group(1).strip()
+
+        return set_code, collector_number, foil
+
     def _create_not_found_price(self, card: Card) -> CardPrice:
         """
         Helper method to create a CardPrice for a card that wasn't found.
@@ -154,6 +199,9 @@ class BaseVendor(ABC):
             price=float("inf"),
             website=self.name,
             found=False,
+            set_code=card.set_code,
+            collector_number=card.collector_number,
+            foil=card.foil,
         )
 
     def _create_not_found_prices(self, cards: List[Card]) -> List[CardPrice]:

@@ -15,6 +15,8 @@ def list_vendors() -> list[VendorMeta]:
             fulfillment_label=v.fulfillment_label,
             supports_bulk_add=v.supports_bulk_add,
             deck_builder_url=v.deck_builder_url,
+            supports_set_info=v.supports_set_info,
+            supports_foil=v.supports_foil,
         )
         for v in CartHandler.VENDORS.values()
     ]

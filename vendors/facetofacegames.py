@@ -24,6 +24,14 @@ class FaceToFaceGamesVendor(BaseVendor):
         return False
 
     @property
+    def supports_set_info(self) -> bool:
+        return True
+
+    @property
+    def supports_foil(self) -> bool:
+        return True
+
+    @property
     def shipping_cost(self) -> float:
         return 10.0
 
@@ -142,6 +150,41 @@ class FaceToFaceGamesVendor(BaseVendor):
 
         return prices
 
+    def _parse_f2f_url(self, url: str, card_name: str) -> tuple:
+        """Parse (set_code, collector_number, foil) from a F2F Shopify product URL.
+
+        URL format: /products/{card-slug}-{collector}-{set-slug}-(non-)foil
+        Example: /products/sol-ring-129-bloomburrow-commander-non-foil
+        """
+        path = url.rstrip('/').split('/')[-1]
+
+        # Determine foil from suffix
+        if path.endswith('-non-foil'):
+            foil = False
+            path = path[:-9]
+        elif path.endswith('-foil'):
+            foil = True
+            path = path[:-5]
+        else:
+            foil = False
+
+        # Strip card name slug from start
+        card_slug = re.sub(r'[^a-z0-9]+', '-', card_name.lower()).strip('-')
+        if path.startswith(card_slug + '-'):
+            remainder = path[len(card_slug) + 1:]
+        else:
+            remainder = path
+
+        # remainder: "{collector_number}-{set-slug}"
+        m = re.match(r'^(\d+)-(.+)$', remainder)
+        if m:
+            collector_number = m.group(1)
+            set_slug = m.group(2)
+            set_name = ' '.join(word.capitalize() for word in set_slug.split('-'))
+            return set_name, collector_number, foil
+
+        return None, None, foil
+
     def _extract_prices(self, cards: List[Card]) -> List[CardPrice]:
         """Extract prices from Face to Face Games results page"""
         prices = []
@@ -182,8 +225,8 @@ class FaceToFaceGamesVendor(BaseVendor):
                 By.CSS_SELECTOR, "div.hits-wrap"
             )
 
-            # Create a mapping of found cards
-            found_cards = {}
+            # Create a mapping of found cards: name → list of all printings
+            found_cards: dict[str, list[CardPrice]] = {}
 
             for idx, group in enumerate(card_groups):
                 try:
@@ -218,12 +261,29 @@ class FaceToFaceGamesVendor(BaseVendor):
                         By.CSS_SELECTOR, "div.bb-card-wrapper"
                     )
 
-                    best_price = float("inf")
-                    best_quantity = 0
+                    # Collect all in-stock variants for this card
+                    card_variants: list[CardPrice] = []
 
-                    # Look through each card product variant
+                    # Look through each card product variant (each wrapper = different printing)
                     for wrapper_idx, wrapper in enumerate(card_wrappers):
                         try:
+                            # Extract set/foil info from Alpine.js product URL
+                            wrapper_set_code = None
+                            wrapper_collector = None
+                            wrapper_foil = False
+                            try:
+                                product_url = self.driver.execute_script("""
+                                    try {
+                                        var d = Alpine.$data(arguments[0]);
+                                        return d.url || null;
+                                    } catch(e) { return null; }
+                                """, wrapper)
+                                if product_url:
+                                    wrapper_set_code, wrapper_collector, wrapper_foil = \
+                                        self._parse_f2f_url(product_url, card_name)
+                            except Exception:
+                                pass
+
                             # Get all variant options (NM, PL, HP conditions)
                             variant_divs = wrapper.find_elements(
                                 By.CSS_SELECTOR, "div.f2f-featured-variant"
@@ -231,33 +291,23 @@ class FaceToFaceGamesVendor(BaseVendor):
 
                             for variant_idx, variant in enumerate(variant_divs):
                                 try:
-                                    # Extract price - need to get the span with x-text, not the $ symbol
-                                    # The structure is: <span class="price-item"><span>$</span><span x-text="...">PRICE</span></span>
                                     price_text = None
 
                                     try:
-                                        # Get the price container
                                         price_container = variant.find_element(By.CSS_SELECTOR, "span.price-item")
-
-                                        # Get all spans inside - the second one should have the price
                                         price_spans = price_container.find_elements(By.TAG_NAME, "span")
 
-                                        # Try to find a span with actual numeric content
                                         for span in price_spans:
                                             text = span.text.strip()
-                                            # Look for spans that have numbers (not just $)
                                             if text and text != '$' and any(c.isdigit() for c in text):
                                                 price_text = text
                                                 break
-
-                                            # If .text is empty, try innerHTML (for Alpine.js x-text bindings that haven't rendered yet)
                                             if not text or text == '$':
                                                 inner_html = span.get_attribute('innerHTML')
                                                 if inner_html and inner_html != '$' and any(c.isdigit() for c in inner_html):
                                                     price_text = inner_html.strip()
                                                     break
 
-                                        # If still no price, try getting the full text and removing $
                                         if not price_text:
                                             full_text = price_container.text.strip()
                                             if full_text and full_text != '$':
@@ -270,49 +320,43 @@ class FaceToFaceGamesVendor(BaseVendor):
 
                                     price = self._parse_price(price_text)
 
-                                    # Extract quantity available
                                     quantity_elem = variant.find_element(
                                         By.CSS_SELECTOR, "span.f2f-fv-title-q"
                                     )
                                     quantity_text = quantity_elem.text.strip()
 
-                                    # If .text is empty, try innerHTML (same Alpine.js issue)
-                                    # Format may be: (<span x-text="...">8</span>) so extract the number from inside the span
                                     if not quantity_text:
                                         inner_html = quantity_elem.get_attribute('innerHTML').strip()
-                                        # Try to extract number from nested span: (<span ...>NUMBER</span>)
                                         nested_match = re.search(r'<span[^>]*>(\d+)</span>', inner_html)
                                         if nested_match:
                                             quantity_text = f"({nested_match.group(1)})"
                                         else:
                                             quantity_text = inner_html
 
-                                    # Format is like "(5)" so extract the number
                                     quantity_match = re.search(r'\((\d+)\)', quantity_text)
                                     quantity = int(quantity_match.group(1)) if quantity_match else 0
 
-                                    # Keep track of best price
-                                    if price < best_price and quantity > 0:
-                                        best_price = price
-                                        best_quantity = quantity
+                                    if quantity > 0:
+                                        card_variants.append(CardPrice(
+                                            card_name=card_name,
+                                            original_query=card_name,
+                                            price=price,
+                                            website=self.name,
+                                            found=True,
+                                            quantity_available=quantity,
+                                            set_code=wrapper_set_code,
+                                            collector_number=wrapper_collector,
+                                            foil=wrapper_foil,
+                                        ))
 
                                 except Exception:
-                                    # Variant might be out of stock or have parsing issues
                                     continue
 
                         except Exception:
                             continue
 
-                    # Add the best price found for this card
-                    if best_price != float("inf"):
-                        found_cards[card_name.lower()] = CardPrice(
-                            card_name=card_name,
-                            original_query=card_name,
-                            price=best_price,
-                            website=self.name,
-                            found=True,
-                            quantity_available=best_quantity,
-                        )
+                    if card_variants:
+                        found_cards[card_name.lower()] = card_variants
 
                 except Exception:
                     continue
@@ -320,37 +364,29 @@ class FaceToFaceGamesVendor(BaseVendor):
             # Match found cards with requested cards
             for card in cards:
                 card_key = card.name.lower()
-                if card_key in found_cards:
-                    # Create a copy with correct original_query (the user's requested card name)
-                    price_info = found_cards[card_key]
-                    price_copy = CardPrice(
-                        card_name=price_info.card_name,
-                        original_query=card.name,  # Use original requested name
-                        price=price_info.price,
-                        website=price_info.website,
-                        found=True,
-                        quantity_available=price_info.quantity_available,
-                    )
-                    prices.append(price_copy)
-                else:
-                    # Check partial matches
-                    found = False
-                    for key, price_info in found_cards.items():
+                matched = found_cards.get(card_key)
+
+                if not matched:
+                    for key, card_prices in found_cards.items():
                         if card_key in key or key in card_key:
-                            price_copy = CardPrice(
-                                card_name=price_info.card_name,
-                                original_query=card.name,
-                                price=price_info.price,
-                                website=price_info.website,
-                                found=True,
-                                quantity_available=price_info.quantity_available,
-                            )
-                            prices.append(price_copy)
-                            found = True
+                            matched = card_prices
                             break
 
-                    if not found:
-                        prices.append(self._create_not_found_price(card))
+                if matched:
+                    for p in matched:
+                        prices.append(CardPrice(
+                            card_name=p.card_name,
+                            original_query=card.name,
+                            price=p.price,
+                            website=p.website,
+                            found=True,
+                            quantity_available=p.quantity_available,
+                            set_code=p.set_code,
+                            collector_number=p.collector_number,
+                            foil=p.foil,
+                        ))
+                else:
+                    prices.append(self._create_not_found_price(card))
 
         except Exception:
             pass

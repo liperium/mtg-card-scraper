@@ -169,10 +169,10 @@ class ScraperManager:
             # Match pattern: quantity name (set) number [*F*]
             # Example: 1 Adagia, Windswept Bastion (EOE) 250
             # Example: Liberty Prime, Recharged (PIP) 5 *F*
-            pattern_with_qty = r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+            pattern_with_qty = r"^(\d+)\s+(.+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+))?(\s+\*F\*)?\s*$"
             # Pattern without quantity (defaults to 1)
             # Example: Lightning Bolt (2XM) 141
-            pattern_no_qty = r"^([A-Za-z].+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+)(?:\s+\*F\*)?)?$"
+            pattern_no_qty = r"^([A-Za-z].+?)\s*(?:\(([A-Z0-9]+)\)\s*(\S+))?(\s+\*F\*)?\s*$"
 
             match = re.match(pattern_with_qty, line.strip())
             if match:
@@ -180,12 +180,14 @@ class ScraperManager:
                 name = match.group(2).strip()
                 set_code = match.group(3) if match.group(3) else None
                 collector_number = match.group(4) if match.group(4) else None
+                foil = bool(match.group(5))
                 cards.append(
                     Card(
                         quantity=quantity,
                         name=name,
                         set_code=set_code,
                         collector_number=collector_number,
+                        foil=foil,
                     )
                 )
             else:
@@ -196,16 +198,31 @@ class ScraperManager:
                     name = match.group(1).strip()
                     set_code = match.group(2) if match.group(2) else None
                     collector_number = match.group(3) if match.group(3) else None
+                    foil = bool(match.group(4))
                     cards.append(
                         Card(
                             quantity=quantity,
                             name=name,
                             set_code=set_code,
                             collector_number=collector_number,
+                            foil=foil,
                         )
                     )
 
         return cards
+
+    @staticmethod
+    def _make_best_price_entry(card_price: CardPrice, quantity_needed: int) -> Dict:
+        """Build a best_prices dict entry from a CardPrice and quantity."""
+        return {
+            "quantity_needed": quantity_needed,
+            "best_price": card_price.price,
+            "website": card_price.website,
+            "quantity_available": card_price.quantity_available,
+            "set_code": card_price.set_code,
+            "collector_number": card_price.collector_number,
+            "foil": card_price.foil,
+        }
 
     def _apply_shipping_costs(
         self,
@@ -262,12 +279,9 @@ class ScraperManager:
                     f"< ${shipping_cost:.2f} shipping — reassigning {len(card_alternatives)} card(s)"
                 )
                 for card_name, alt in card_alternatives.items():
-                    best_prices[card_name] = {
-                        "quantity_needed": best_prices[card_name]["quantity_needed"],
-                        "best_price": alt.price,
-                        "website": alt.website,
-                        "quantity_available": alt.quantity_available,
-                    }
+                    best_prices[card_name] = self._make_best_price_entry(
+                        alt, best_prices[card_name]["quantity_needed"]
+                    )
 
         return best_prices
 
@@ -324,12 +338,7 @@ class ScraperManager:
                 found_prices = [p for p in card_prices[card_name] if p.found]
                 if found_prices:
                     best = min(found_prices, key=lambda p: p.price * weights.get(p.website, 1.0))
-                    best_prices[card_name] = {
-                        "quantity_needed": card.quantity,
-                        "best_price": best.price,
-                        "website": best.website,
-                        "quantity_available": best.quantity_available,
-                    }
+                    best_prices[card_name] = self._make_best_price_entry(best, card.quantity)
 
         # Step 2: shipping gate — reassign if total effective savings < flat shipping fee
         if vendor_shipping_costs:
@@ -385,6 +394,17 @@ class ScraperManager:
                         f"{card_names} only found at {vendor} (${shipping:.0f} shipping on ${card_total:.2f} of cards)"
                     )
 
+        # Build card_vendor_prices: {card_name: {vendor: [CardPrice, ...]}}
+        # for the printing picker UI
+        card_vendor_prices: Dict[str, Dict[str, List[CardPrice]]] = {}
+        for card_name, prices_list in card_prices.items():
+            vendor_map: Dict[str, List[CardPrice]] = {}
+            for p in prices_list:
+                if p.found:
+                    vendor_map.setdefault(p.website, []).append(p)
+            if vendor_map:
+                card_vendor_prices[card_name] = vendor_map
+
         return {
             "best_prices": best_prices,
             "buy_lists": buy_lists,
@@ -392,6 +412,7 @@ class ScraperManager:
             "not_found": not_found,
             "all_prices": all_prices,
             "warnings": warnings,
+            "card_vendor_prices": card_vendor_prices,
         }
 
     def _apply_vendor_elimination(
@@ -474,12 +495,9 @@ class ScraperManager:
                 f"({len(vendor_cards[cheapest])} card(s), weighted extra: ${elimination_costs[cheapest]:.2f})"
             )
             for card_name, alt in card_alts_cache[cheapest].items():
-                best_prices[card_name] = {
-                    "quantity_needed": best_prices[card_name]["quantity_needed"],
-                    "best_price": alt.price,
-                    "website": alt.website,
-                    "quantity_available": alt.quantity_available,
-                }
+                best_prices[card_name] = self._make_best_price_entry(
+                    alt, best_prices[card_name]["quantity_needed"]
+                )
             active_vendors.discard(cheapest)
 
         return best_prices
@@ -536,12 +554,9 @@ class ScraperManager:
                 ]
                 if alts:
                     best_alt = min(alts, key=lambda p: p.price * w.get(p.website, 1.0))
-                    best_prices[card_name] = {
-                        "quantity_needed": best_prices[card_name]["quantity_needed"],
-                        "best_price": best_alt.price,
-                        "website": best_alt.website,
-                        "quantity_available": best_alt.quantity_available,
-                    }
+                    best_prices[card_name] = self._make_best_price_entry(
+                        best_alt, best_prices[card_name]["quantity_needed"]
+                    )
                 else:
                     # No alternative — card stays, vendor can't be fully eliminated
                     all_moved = False
@@ -564,7 +579,10 @@ class ScraperManager:
                 "card": card_name,
                 "quantity": details["quantity_needed"],
                 "price_per_unit": details["best_price"],
-                "total_price": details["best_price"] * details["quantity_needed"]
+                "total_price": details["best_price"] * details["quantity_needed"],
+                "set_code": details.get("set_code"),
+                "collector_number": details.get("collector_number"),
+                "foil": details.get("foil", False),
             })
 
         return buy_lists

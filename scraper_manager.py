@@ -4,8 +4,8 @@ from typing import List, Dict, Optional, Callable, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from base_vendor import Card, CardPrice, BaseVendor
-from scraper_config import ScraperConfig, VendorFilterConfig
+from base_vendor import Card, CardPrice
+from scraper_config import ScraperConfig
 
 
 class ScraperManager:
@@ -19,8 +19,6 @@ class ScraperManager:
             config: ScraperConfig with enabled scrapers and filtering rules
         """
         self.config = config
-        self.driver = None
-        self.scrapers: List[BaseVendor] = []
 
     def _initialize_driver(self) -> webdriver.Chrome:
         """Create a fresh ChromeDriver instance with standard options"""
@@ -209,307 +207,6 @@ class ScraperManager:
 
         return cards
 
-    def scrape_all(self, card_list: str, progress_callback=None) -> Dict:
-        """
-        Main method to scrape all websites and apply filtering logic
-
-        Args:
-            card_list: Card list in Moxfield format
-            progress_callback: Optional callback function(current, total, message) for progress updates
-
-        Returns:
-            Dictionary with results including best prices, buy lists, and summary
-        """
-        try:
-            # Initialize driver with improved options
-            options = webdriver.ChromeOptions()
-            if self.config.headless:
-                options.add_argument("--headless=new")  # Use new headless mode
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--disable-gpu")  # Disable GPU acceleration
-            options.add_argument("--disable-extensions")
-            options.add_argument("--disable-software-rasterizer")
-            options.add_argument("--disable-blink-features=AutomationControlled")
-            options.add_argument("--window-size=1920,1080")
-
-            # Add user agent to avoid detection
-            options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-            # Suppress logging
-            options.add_experimental_option('excludeSwitches', ['enable-logging'])
-
-            try:
-                self.driver = webdriver.Chrome(options=options)
-                self.driver.set_page_load_timeout(30)
-                print(f"ChromeDriver initialized successfully")
-            except Exception as driver_error:
-                print(f"Error initializing ChromeDriver: {driver_error}")
-                print("\nTroubleshooting:")
-                print("1. Make sure ChromeDriver is installed and matches your Chrome browser version")
-                print("   Download from: https://chromedriver.chromium.org/downloads")
-                print("2. Run the diagnostic script:")
-                print("   python check_chromedriver.py")
-                raise
-
-            # Parse cards
-            cards = self.parse_moxfield_format(card_list)
-            print(f"Parsed {len(cards)} cards from input")
-
-            # Initialize scrapers
-            self.scrapers = [
-                scraper_class(self.driver)
-                for scraper_class in self.config.enabled_scrapers
-                if scraper_class(self.driver).is_enabled()
-            ]
-
-            all_prices = []
-
-            # Scrape each website
-            total_scrapers = len(self.scrapers)
-            for idx, scraper in enumerate(self.scrapers, 1):
-                print(f"{scraper.name} - Scraping...")
-
-                # Call progress callback if provided
-                if progress_callback:
-                    progress_callback(idx, total_scrapers, f"Scraping {scraper.name}...")
-
-                try:
-                    prices = scraper.scrape(cards)
-                    all_prices.extend(prices)
-                    print(f"{scraper.name} - Successfully scraped {len([p for p in prices if p.found])} cards")
-                except Exception as scraper_error:
-                    print(f"{scraper.name} - Error scraping: {scraper_error}")
-                    import traceback
-                    traceback.print_exc()
-                    # Add not found entries for all cards for this scraper
-                    not_found_prices = scraper._create_not_found_prices(cards)
-                    all_prices.extend(not_found_prices)
-                    print(f"{scraper.name} - Continuing with other scrapers...")
-
-            # Analyze results with vendor filtering
-            if self.config.vendor_filter.enable_filtering:
-                results = self._analyze_with_filtering(all_prices, cards)
-            else:
-                results = self._analyze_without_filtering(all_prices, cards)
-
-            # Add all prices to results for debugging
-            results["all_prices"] = all_prices
-
-            return results
-
-        finally:
-            if self.driver:
-                self.driver.quit()
-
-    def _analyze_without_filtering(
-        self, all_prices: List[CardPrice], cards: List[Card]
-    ) -> Dict:
-        """Analyze results without vendor filtering (original logic)"""
-        results = {"best_prices": {}, "buy_lists": {}, "not_found": [], "summary": {}}
-
-        # Group prices by card
-        card_prices = {}
-        for price in all_prices:
-            if price.original_query not in card_prices:
-                card_prices[price.original_query] = []
-            card_prices[price.original_query].append(price)
-
-        # Find best price for each card
-        for card in cards:
-            card_name = card.name
-            if card_name in card_prices:
-                found_prices = [p for p in card_prices[card_name] if p.found]
-
-                if found_prices:
-                    best_price = min(found_prices, key=lambda x: x.price)
-                    results["best_prices"][card_name] = {
-                        "quantity_needed": card.quantity,
-                        "best_price": best_price.price,
-                        "website": best_price.website,
-                        "quantity_available": best_price.quantity_available,
-                    }
-
-                    # Add to buy list
-                    if best_price.website not in results["buy_lists"]:
-                        results["buy_lists"][best_price.website] = []
-                    results["buy_lists"][best_price.website].append(
-                        {
-                            "card": card_name,
-                            "quantity": card.quantity,
-                            "price_per_unit": best_price.price,
-                            "total_price": best_price.price * card.quantity,
-                        }
-                    )
-                else:
-                    results["not_found"].append(card_name)
-            else:
-                results["not_found"].append(card_name)
-
-        # Calculate summary
-        for website, cards_list in results["buy_lists"].items():
-            total = sum(c["total_price"] for c in cards_list)
-            results["summary"][website] = {
-                "total_cards": len(cards_list),
-                "total_price": round(total, 2),
-            }
-
-        return results
-
-    def _analyze_with_filtering(
-        self, all_prices: List[CardPrice], cards: List[Card]
-    ) -> Dict:
-        """
-        Analyze results WITH vendor filtering logic
-
-        Logic:
-        1. Find best price for each card across all vendors
-        2. Build initial buy list with best prices
-        3. Apply filtering:
-           - If a vendor has < min_cards_per_vendor cards, redistribute those cards
-           - Exception: Keep the card if it's min_price_difference_override cheaper
-        4. Redistribute filtered cards to next best vendor
-        """
-        config = self.config.vendor_filter
-        results = {"best_prices": {}, "buy_lists": {}, "not_found": [], "summary": {}}
-
-        # Group prices by card
-        card_prices = {}
-        for price in all_prices:
-            if price.original_query not in card_prices:
-                card_prices[price.original_query] = []
-            card_prices[price.original_query].append(price)
-
-        # Find all available prices for each card (sorted by price)
-        card_price_options = {}
-        for card in cards:
-            card_name = card.name
-            if card_name in card_prices:
-                found_prices = [p for p in card_prices[card_name] if p.found]
-                if found_prices:
-                    # Sort by price
-                    found_prices.sort(key=lambda x: x.price)
-                    card_price_options[card_name] = {
-                        "card": card,
-                        "prices": found_prices,
-                    }
-                else:
-                    results["not_found"].append(card_name)
-            else:
-                results["not_found"].append(card_name)
-
-        # Build initial assignment (best price for each card)
-        initial_assignment = {}
-        for card_name, data in card_price_options.items():
-            best_price = data["prices"][0]
-            initial_assignment[card_name] = {
-                "card": data["card"],
-                "price_info": best_price,
-                "all_prices": data["prices"],
-            }
-
-        # Group by vendor
-        vendor_cards = {}
-        for card_name, assignment in initial_assignment.items():
-            website = assignment["price_info"].website
-            if website not in vendor_cards:
-                vendor_cards[website] = []
-            vendor_cards[website].append(card_name)
-
-        # Apply filtering logic
-        # Step 1: Identify vendors with < min_cards
-        vendors_to_filter = set()
-        for website, cards_list in vendor_cards.items():
-            if len(cards_list) < config.min_cards_per_vendor:
-                vendors_to_filter.add(website)
-                print(f"  Vendor '{website}' has only {len(cards_list)} cards (min: {config.min_cards_per_vendor}) - filtering...")
-
-        # Step 2: For each vendor being filtered, check which cards qualify for price override
-        cards_with_price_override = set()
-        for card_name, assignment in initial_assignment.items():
-            website = assignment["price_info"].website
-
-            if website in vendors_to_filter:
-                # This vendor is being filtered, check if card qualifies for price override
-                all_prices = assignment["all_prices"]
-
-                if len(all_prices) > 1:
-                    best_price = all_prices[0].price
-                    second_best_price = all_prices[1].price
-                    price_diff = second_best_price - best_price
-
-                    if price_diff >= config.min_price_difference_override:
-                        # Price difference is significant, keep this card from filtered vendor
-                        cards_with_price_override.add(card_name)
-                        print(
-                            f"  [OVERRIDE] Keeping {card_name} from {website} "
-                            f"(${price_diff:.2f} cheaper than {all_prices[1].website}, override: ${config.min_price_difference_override})"
-                        )
-
-        # Step 3: Build final assignment
-        final_assignment = {}
-        for card_name, assignment in initial_assignment.items():
-            card = assignment["card"]
-            best_price_info = assignment["price_info"]
-            all_prices = assignment["all_prices"]
-            website = best_price_info.website
-
-            # Keep card if:
-            # - Vendor is NOT being filtered, OR
-            # - Card qualifies for price override
-            if website not in vendors_to_filter or card_name in cards_with_price_override:
-                final_assignment[card_name] = assignment
-            else:
-                # Vendor is filtered and card doesn't qualify for override
-                # Move to next best vendor
-                if len(all_prices) > 1:
-                    print(
-                        f"  [MOVE] {card_name}: {website} (${best_price_info.price:.2f}) -> {all_prices[1].website} (${all_prices[1].price:.2f})"
-                    )
-                    final_assignment[card_name] = {
-                        "card": card,
-                        "price_info": all_prices[1],
-                        "all_prices": all_prices,
-                    }
-                else:
-                    # Only one vendor has this card, keep it even though vendor is filtered
-                    print(f"  [WARN] Keeping {card_name} from {website} (only vendor with this card)")
-                    final_assignment[card_name] = assignment
-
-        # Build final results
-        for card_name, assignment in final_assignment.items():
-            card = assignment["card"]
-            price_info = assignment["price_info"]
-
-            results["best_prices"][card_name] = {
-                "quantity_needed": card.quantity,
-                "best_price": price_info.price,
-                "website": price_info.website,
-                "quantity_available": price_info.quantity_available,
-            }
-
-            # Add to buy list
-            if price_info.website not in results["buy_lists"]:
-                results["buy_lists"][price_info.website] = []
-            results["buy_lists"][price_info.website].append(
-                {
-                    "card": card_name,
-                    "quantity": card.quantity,
-                    "price_per_unit": price_info.price,
-                    "total_price": price_info.price * card.quantity,
-                }
-            )
-
-        # Calculate summary
-        for website, cards_list in results["buy_lists"].items():
-            total = sum(c["total_price"] for c in cards_list)
-            results["summary"][website] = {
-                "total_cards": len(cards_list),
-                "total_price": round(total, 2),
-            }
-
-        return results
-
     def _apply_shipping_costs(
         self,
         best_prices: Dict,
@@ -553,15 +250,12 @@ class ScraperManager:
                 if alternatives:
                     # Best alternative by weighted effective price (same as Step 1)
                     best_alt = min(alternatives, key=lambda p: p.price * weights.get(p.website, 1.0))
-                    # Savings in weighted effective terms:
-                    # positive = this vendor is cheaper (accounting for preference)
-                    eff_current = current_price * vendor_weight
-                    eff_alt = best_alt.price * weights.get(best_alt.website, 1.0)
-                    total_savings += eff_alt - eff_current
+                    # Savings in real dollars: how much more we'd pay at the alternative
+                    total_savings += best_alt.price - current_price
                     card_alternatives[card_name] = best_alt
                 # No alternative → card stays at shipping vendor regardless
 
-            # If effective savings don't cover the flat shipping fee, reassign
+            # If real-dollar savings don't cover the flat shipping fee, reassign
             if total_savings < shipping_cost:
                 print(
                     f"Shipping gate: {vendor} effective savings ${total_savings:.2f} "
@@ -667,8 +361,19 @@ class ScraperManager:
             if card.name not in best_prices
         ]
 
-        # Warn when a card is only available at a shipping vendor
+        # Warnings
         warnings = []
+
+        # Warn when quantity_available < quantity_needed
+        for card_name, info in best_prices.items():
+            qty_needed = info["quantity_needed"]
+            qty_available = info["quantity_available"]
+            if qty_available > 0 and qty_available < qty_needed:
+                warnings.append(
+                    f"{card_name}: need {qty_needed} but {info['website']} only has {qty_available} in stock"
+                )
+
+        # Warn when a card is only available at a shipping vendor
         for vendor in summary:
             shipping = (vendor_shipping_costs or {}).get(vendor, 0.0)
             if shipping > 0:
@@ -688,44 +393,6 @@ class ScraperManager:
             "all_prices": all_prices,
             "warnings": warnings,
         }
-
-    def _select_vendor_with_preference(
-        self,
-        available_prices: List[CardPrice],
-        vendor_preferences: List[str],
-        threshold: float,
-        selected_vendors: List[str]
-    ) -> Optional[CardPrice]:
-        """
-        Select vendor for a card based on preference order and threshold.
-
-        Logic:
-        1. Find the absolute cheapest price among selected vendors
-        2. For each vendor in preference order:
-           - If vendor is in selected_vendors AND has this card:
-             - If price <= (cheapest + threshold): select this vendor
-        3. If no preferred vendor within threshold, select absolute cheapest
-        """
-        if not available_prices:
-            return None
-
-        # Sort by price (ascending)
-        sorted_prices = sorted(available_prices, key=lambda p: p.price)
-        cheapest_price = sorted_prices[0].price
-
-        # Try to find a preferred vendor within threshold
-        for preferred_vendor in vendor_preferences:
-            if preferred_vendor not in selected_vendors:
-                continue  # Skip unselected vendors
-
-            for price in available_prices:
-                if price.website == preferred_vendor:
-                    if price.price <= (cheapest_price + threshold):
-                        return price
-                    break  # This vendor's price is too high
-
-        # Fall back to absolute cheapest
-        return sorted_prices[0]
 
     def _apply_vendor_elimination(
         self,
@@ -817,85 +484,6 @@ class ScraperManager:
 
         return best_prices
 
-    def _apply_vendor_preferences(
-        self,
-        best_prices: Dict,
-        card_prices: Dict[str, List[CardPrice]],
-        vendor_preferences: List[str],
-        threshold: float,
-        selected_vendors: List[str],
-    ) -> Dict:
-        """
-        Consolidate cards to preferred vendors at the batch level.
-
-        For each vendor V that has cards assigned, check if a more-preferred vendor P
-        stocks ALL of V's assigned cards. If the total extra cost across that batch
-        is <= threshold, move all of V's cards to P.
-
-        Iterates until stable (handles cascading consolidations).
-        """
-        changed = True
-        while changed:
-            changed = False
-
-            # Rebuild current assignments
-            vendor_assignments: Dict[str, List[str]] = {}
-            for card_name, info in best_prices.items():
-                vendor_assignments.setdefault(info["website"], []).append(card_name)
-
-            # Process least-preferred vendors first
-            for vendor in reversed(vendor_preferences):
-                if vendor not in vendor_assignments:
-                    continue
-                vendor_idx = vendor_preferences.index(vendor)
-                assigned_cards = vendor_assignments[vendor]
-
-                # Try each more-preferred vendor
-                for preferred in vendor_preferences[:vendor_idx]:
-                    if preferred not in selected_vendors:
-                        continue
-
-                    # Check if preferred vendor stocks ALL cards in this batch
-                    alt_prices: Dict[str, CardPrice] = {}
-                    all_covered = True
-                    for card_name in assigned_cards:
-                        alts = [
-                            p for p in card_prices.get(card_name, [])
-                            if p.found and p.website == preferred
-                        ]
-                        if alts:
-                            alt_prices[card_name] = min(alts, key=lambda p: p.price)
-                        else:
-                            all_covered = False
-                            break
-
-                    if not all_covered:
-                        continue
-
-                    # Total extra cost of buying from preferred vendor
-                    extra_cost = sum(
-                        alt_prices[cn].price - best_prices[cn]["best_price"]
-                        for cn in assigned_cards
-                    )
-
-                    if extra_cost <= threshold:
-                        print(
-                            f"Preference: consolidating {len(assigned_cards)} card(s) "
-                            f"from {vendor} → {preferred} (extra: ${extra_cost:.2f})"
-                        )
-                        for card_name in assigned_cards:
-                            alt = alt_prices[card_name]
-                            best_prices[card_name] = {
-                                "quantity_needed": best_prices[card_name]["quantity_needed"],
-                                "best_price": alt.price,
-                                "website": preferred,
-                                "quantity_available": alt.quantity_available,
-                            }
-                        changed = True
-                        break  # restart outer loop with updated assignments
-
-        return best_prices
-
     def _apply_min_cards_filter(
         self,
         best_prices: Dict,
@@ -908,33 +496,43 @@ class ScraperManager:
         Hard filter: vendors below min_cards have their cards moved to the cheapest
         available alternative. No budget check.
 
-        Processes smallest vendors first. Tracks active_vendors and vendor_cards
-        live so that redistributed cards count toward the receiving vendor's total,
-        correctly handling cascades in a single pass.
+        Loops until no vendor is below threshold (handles cascading redistributions
+        where eliminating vendor A causes vendor B to fall below min_cards).
+        Capped at 20 iterations to prevent infinite loops.
         """
-        # Build initial assignments
-        vendor_cards: Dict[str, List[str]] = {}
-        for card_name, info in best_prices.items():
-            vendor_cards.setdefault(info["website"], []).append(card_name)
+        w = vendor_weights or {}
+        max_iterations = 20
 
-        active_vendors: set = set(vendor_cards.keys())
+        for iteration in range(max_iterations):
+            # Rebuild assignments from current best_prices
+            vendor_cards: Dict[str, List[str]] = {}
+            for card_name, info in best_prices.items():
+                vendor_cards.setdefault(info["website"], []).append(card_name)
 
-        # Sort by initial card count (smallest first — eliminate most fragmented first)
-        for vendor in sorted(list(vendor_cards.keys()), key=lambda v: len(vendor_cards[v])):
-            current_cards = vendor_cards.get(vendor, [])
-            if len(current_cards) >= min_cards:
-                continue  # already at or above threshold (may have grown from prior redistribution)
+            # Find smallest vendor below threshold
+            violators = [
+                (vendor, cards_list)
+                for vendor, cards_list in vendor_cards.items()
+                if len(cards_list) < min_cards
+            ]
+            if not violators:
+                break  # all vendors at or above threshold
 
-            remaining = active_vendors - {vendor}
+            # Eliminate smallest violator first
+            violators.sort(key=lambda vc: len(vc[1]))
+            vendor, current_cards = violators[0]
+
+            active_vendors = set(vendor_cards.keys()) - {vendor}
             print(
                 f"Min-cards: {vendor} has {len(current_cards)} card(s) "
                 f"(min {min_cards}) — eliminating"
             )
-            w = vendor_weights or {}
+
+            all_moved = True
             for card_name in current_cards:
                 alts = [
                     p for p in card_prices.get(card_name, [])
-                    if p.found and p.website in remaining
+                    if p.found and p.website in active_vendors
                 ]
                 if alts:
                     best_alt = min(alts, key=lambda p: p.price * w.get(p.website, 1.0))
@@ -944,12 +542,12 @@ class ScraperManager:
                         "website": best_alt.website,
                         "quantity_available": best_alt.quantity_available,
                     }
-                    # Update live tracking so receiving vendor's count grows
-                    vendor_cards.setdefault(best_alt.website, []).append(card_name)
-                # else: no alternative — card stays (can't eliminate this vendor fully)
+                else:
+                    # No alternative — card stays, vendor can't be fully eliminated
+                    all_moved = False
 
-            active_vendors.discard(vendor)
-            vendor_cards.pop(vendor, None)
+            if not all_moved:
+                break  # can't eliminate this vendor, stop to avoid infinite loop
 
         return best_prices
 

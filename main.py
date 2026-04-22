@@ -46,7 +46,16 @@ def main():
     manager = ScraperManager(config)
 
     try:
-        results = manager.scrape_all(card_list)
+        parsed_cards = manager.parse_moxfield_format(card_list)
+        raw_results = manager.scrape_all_parallel(cards=parsed_cards)
+
+        vendor_names = list(raw_results.keys())
+        results = manager.recalculate_results_for_selected_vendors(
+            all_vendor_results=raw_results,
+            parsed_cards=parsed_cards,
+            selected_vendors=vendor_names,
+        )
+
         manager.print_results(results)
 
         if results.get("all_prices"):

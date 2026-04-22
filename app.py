@@ -409,6 +409,11 @@ if st.session_state.results and st.session_state.df is not None:
                 delta="Incl. shipping",
             )
 
+    # Warnings (quantity issues, shipping oddities)
+    if st.session_state.results.get("warnings"):
+        for warn in st.session_state.results["warnings"]:
+            st.warning(f"⚠️ {warn}")
+
     # Best prices table
     st.markdown("---")
     st.subheader("💰 Best Prices by Card")

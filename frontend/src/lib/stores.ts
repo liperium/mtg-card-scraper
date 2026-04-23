@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { JobResponse, RecalculateResponse, VendorMeta } from './types';
+import type { JobResponse, PinnedPrinting, RecalculateResponse, VendorMeta } from './types';
 
 // Vendor metadata (loaded on mount)
 export const vendors = writable<VendorMeta[]>([]);
@@ -20,6 +20,9 @@ export const selectedVendors = writable<Set<string>>(new Set());
 export const vendorWeights = writable<Record<string, number>>({});
 export const minCardsPerVendor = writable(1);
 export const consolidationBudget = writable(0);
+
+// Pinned printings (card name → printing override)
+export const pinnedPrintings = writable<Record<string, PinnedPrinting>>({});
 
 // Recalculate results
 export const results = writable<RecalculateResponse | null>(null);

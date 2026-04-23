@@ -36,6 +36,9 @@ class JobState:
                             website=p["website"],
                             found=p["found"],
                             quantity_available=p.get("quantity_available", 0),
+                            set_code=p.get("set_code"),
+                            collector_number=p.get("collector_number"),
+                            foil=p.get("foil", False),
                         )
                         for p in prices
                     ]

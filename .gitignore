@@ -13,4 +13,6 @@ mtg_best_prices.csv
 .claude/settings.local.json
 
 frontend/.svelte-kit
+frontend/node_modules.cache/
+.direnv/
 frontend/node_modules

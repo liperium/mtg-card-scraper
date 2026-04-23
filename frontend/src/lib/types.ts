@@ -67,6 +67,12 @@ export interface RecalculateResponse {
 	warnings: string[];
 }
 
+export interface PinnedPrinting {
+	set_code: string;
+	collector_number: string;
+	foil: boolean;
+}
+
 export interface CartFormatResponse {
 	url: string;
 	card_list: string;

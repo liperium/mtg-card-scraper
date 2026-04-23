@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from selenium import webdriver
+from scryfall import get_set_code
 
 
 @dataclass
@@ -176,11 +177,14 @@ class BaseVendor(ABC):
             set_code = match.group(1)
             collector_number = match.group(2)
         else:
-            # Fall back to full set name inside brackets
+            # Fall back to full set name inside brackets, resolve via Scryfall
             match = re.search(r'\[([^\]]+)\]', title)
             if match:
-                set_code = match.group(1).strip()
+                full_name = match.group(1).strip()
+                resolved = get_set_code(full_name)
+                set_code = resolved if resolved else full_name
 
+        self.log(f"_parse_title_set_info: {title!r} → set={set_code!r} cn={collector_number!r} foil={foil}")
         return set_code, collector_number, foil
 
     def _create_not_found_price(self, card: Card) -> CardPrice:

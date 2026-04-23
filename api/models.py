@@ -19,12 +19,19 @@ class ScrapeRequest(BaseModel):
     enabled_vendors: list[str]
 
 
+class PinnedPrinting(BaseModel):
+    set_code: str
+    collector_number: str
+    foil: bool
+
+
 class RecalculateRequest(BaseModel):
     job_id: str
     selected_vendors: list[str]
     vendor_weights: dict[str, float] = {}
     min_cards_per_vendor: int = 1
     consolidation_budget: float = 0.0
+    pinned_printings: dict[str, PinnedPrinting] = {}
 
 
 class CartItemInput(BaseModel):

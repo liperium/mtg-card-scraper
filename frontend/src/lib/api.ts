@@ -61,6 +61,7 @@ export function recalculate(params: {
 	vendor_weights: Record<string, number>;
 	min_cards_per_vendor: number;
 	consolidation_budget: number;
+	pinned_printings?: Record<string, { set_code: string; collector_number: string; foil: boolean }>;
 }): Promise<RecalculateResponse> {
 	return post('/recalculate', params);
 }

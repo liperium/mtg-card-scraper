@@ -28,6 +28,9 @@ def recalculate(req: RecalculateRequest) -> RecalculateResponse:
                 website=p["website"],
                 found=p["found"],
                 quantity_available=p.get("quantity_available", 0),
+                set_code=p.get("set_code"),
+                collector_number=p.get("collector_number"),
+                foil=p.get("foil", False),
             )
             for p in prices
         ]
@@ -40,6 +43,7 @@ def recalculate(req: RecalculateRequest) -> RecalculateResponse:
             name=c["name"],
             set_code=c.get("set_code"),
             collector_number=c.get("collector_number"),
+            foil=c.get("foil", False),
         )
         for c in job.parsed_cards
     ]
@@ -63,6 +67,9 @@ def recalculate(req: RecalculateRequest) -> RecalculateResponse:
         vendor_weights=req.vendor_weights or {},
         min_cards_per_vendor=req.min_cards_per_vendor,
         consolidation_budget=req.consolidation_budget,
+        pinned_printings={
+            name: pin.model_dump() for name, pin in req.pinned_printings.items()
+        } if req.pinned_printings else None,
     )
 
     # Sanitize any inf that leaked into best_prices

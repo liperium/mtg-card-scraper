@@ -212,6 +212,17 @@ class ScraperManager:
         return cards
 
     @staticmethod
+    def _matches_pin(price: CardPrice, pin: Optional[Dict]) -> bool:
+        """Return True if price matches the pinned printing (or no pin set)."""
+        if not pin:
+            return True
+        return (
+            price.set_code == pin["set_code"]
+            and price.collector_number == pin["collector_number"]
+            and price.foil == pin["foil"]
+        )
+
+    @staticmethod
     def _make_best_price_entry(card_price: CardPrice, quantity_needed: int) -> Dict:
         """Build a best_prices dict entry from a CardPrice and quantity."""
         return {
@@ -231,6 +242,7 @@ class ScraperManager:
         card_prices: Dict[str, List[CardPrice]],
         selected_vendors: List[str],
         vendor_weights: Dict[str, float] = None,
+        pinned_printings: Optional[Dict[str, Dict]] = None,
     ) -> Dict:
         """
         Post-process assignments: if a shipping vendor's total effective savings across
@@ -260,9 +272,11 @@ class ScraperManager:
 
             for card_name in assigned_cards:
                 current_price = best_prices[card_name]["best_price"]
+                pin = (pinned_printings or {}).get(card_name)
                 alternatives = [
                     p for p in card_prices.get(card_name, [])
                     if p.found and p.website != vendor and p.website in selected_vendors
+                    and self._matches_pin(p, pin)
                 ]
                 if alternatives:
                     # Best alternative by weighted effective price (same as Step 1)
@@ -294,6 +308,7 @@ class ScraperManager:
         vendor_weights: Dict[str, float] = None,
         min_cards_per_vendor: int = 1,
         consolidation_budget: float = 0.0,
+        pinned_printings: Optional[Dict[str, Dict]] = None,
     ) -> Dict:
         """
         Recalculate best prices and buy lists based on selected vendors.
@@ -332,10 +347,16 @@ class ScraperManager:
 
         # Step 1: pick cheapest weighted price per card
         # Weight biases the selection; actual (unweighted) price is stored.
+        # Pinned printings restrict candidates to matching set+CN+foil.
         for card in parsed_cards:
             card_name = card.name
             if card_name in card_prices:
                 found_prices = [p for p in card_prices[card_name] if p.found]
+                pin = (pinned_printings or {}).get(card_name)
+                if pin and found_prices:
+                    pinned = [p for p in found_prices if self._matches_pin(p, pin)]
+                    if pinned:
+                        found_prices = pinned
                 if found_prices:
                     best = min(found_prices, key=lambda p: p.price * weights.get(p.website, 1.0))
                     best_prices[card_name] = self._make_best_price_entry(best, card.quantity)
@@ -343,19 +364,22 @@ class ScraperManager:
         # Step 2: shipping gate — reassign if total effective savings < flat shipping fee
         if vendor_shipping_costs:
             best_prices = self._apply_shipping_costs(
-                best_prices, vendor_shipping_costs, card_prices, selected_vendors, weights
+                best_prices, vendor_shipping_costs, card_prices, selected_vendors, weights,
+                pinned_printings,
             )
 
         # Step 3: vendor elimination — greedily drop cheapest-to-eliminate vendor within budget
         if consolidation_budget and consolidation_budget > 0:
             best_prices = self._apply_vendor_elimination(
-                best_prices, card_prices, consolidation_budget, weights
+                best_prices, card_prices, consolidation_budget, weights,
+                pinned_printings,
             )
 
         # Step 4: min-cards hard filter
         if min_cards_per_vendor and min_cards_per_vendor > 1:
             best_prices = self._apply_min_cards_filter(
-                best_prices, card_prices, selected_vendors, min_cards_per_vendor, weights
+                best_prices, card_prices, selected_vendors, min_cards_per_vendor, weights,
+                pinned_printings,
             )
 
         # Build buy lists per vendor
@@ -421,6 +445,7 @@ class ScraperManager:
         card_prices: Dict[str, List[CardPrice]],
         budget: float,
         vendor_weights: Dict[str, float] = None,
+        pinned_printings: Optional[Dict[str, Dict]] = None,
     ) -> Dict:
         """
         Greedy vendor elimination: repeatedly remove the cheapest-to-eliminate vendor
@@ -461,9 +486,11 @@ class ScraperManager:
                 alts_for_vendor: Dict[str, CardPrice] = {}
 
                 for card_name in assigned:
+                    pin = (pinned_printings or {}).get(card_name)
                     alts = [
                         p for p in card_prices.get(card_name, [])
                         if p.found and p.website in remaining
+                        and self._matches_pin(p, pin)
                     ]
                     if not alts:
                         all_have_alt = False
@@ -509,6 +536,7 @@ class ScraperManager:
         selected_vendors: List[str],
         min_cards: int,
         vendor_weights: Dict[str, float] = None,
+        pinned_printings: Optional[Dict[str, Dict]] = None,
     ) -> Dict:
         """
         Hard filter: vendors below min_cards have their cards moved to the cheapest
@@ -548,9 +576,11 @@ class ScraperManager:
 
             all_moved = True
             for card_name in current_cards:
+                pin = (pinned_printings or {}).get(card_name)
                 alts = [
                     p for p in card_prices.get(card_name, [])
                     if p.found and p.website in active_vendors
+                    and self._matches_pin(p, pin)
                 ]
                 if alts:
                     best_alt = min(alts, key=lambda p: p.price * w.get(p.website, 1.0))
